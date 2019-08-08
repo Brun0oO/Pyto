@@ -6,15 +6,7 @@
 //  Copyright © 2018 Adrian Labbé. All rights reserved.
 //
 
-#if os(iOS)
 import UIKit
-
-typealias Document = UIDocument
-#else
-import Cocoa
-
-typealias Document = NSDocument
-#endif
 
 /// Errors opening the document.
 enum PyDocumentError: Error {
@@ -23,10 +15,51 @@ enum PyDocumentError: Error {
 }
 
 /// A document representing a Python script.
-class PyDocument: Document {
+@objc class PyDocument: UIDocument {
     
     /// The text of the Python script to save.
-    var text = ""
+    @objc var text = ""
+    
+    #if MAIN
+    /// The editor that is editing this document.
+    var editor: EditorViewController?
+    #endif
+    
+    private var storedModificationDate: Date? {
+        didSet {
+            print(self.storedModificationDate ?? "nil")
+        }
+    }
+    
+    /// Checks for conflicts and presents an alert if needed.
+    ///
+    /// - Parameters:
+    ///     - viewController: The View controller where the conflicts resolver should be presented.
+    ///     - completion: Code to call after the file is checked.
+    func checkForConflicts(onViewController viewController: UIViewController, completion: (() -> Void)?) {
+        #if MAIN
+        if documentState == UIDocument.State.inConflict, let versions = NSFileVersion.unresolvedConflictVersionsOfItem(at: fileURL), versions.count > 1 {
+            
+            guard let resolver = UIStoryboard(name: "ConflictsResolver", bundle: Bundle.main).instantiateInitialViewController() as? ResolveConflictsTableViewController else {
+                completion?()
+                return
+            }
+            
+            resolver.document = self
+            resolver.versions = versions
+            resolver.completion = completion
+            
+            let navVC = UINavigationController(rootViewController: resolver)
+            navVC.modalPresentationStyle = .formSheet
+            
+            viewController.present(navVC, animated: true, completion: nil)
+        } else {
+            completion?()
+        }
+        #else
+        completion?()
+        #endif
+    }
     
     private func load(contents: Any) throws {
         guard let data = contents as? Data else {
@@ -48,8 +81,6 @@ class PyDocument: Document {
         return data
     }
     
-    #if os(iOS)
-    
     override func contents(forType typeName: String) throws -> Any {
         
         do {
@@ -67,36 +98,33 @@ class PyDocument: Document {
         }
     }
     
-    #else
-    
-    override func makeWindowControllers() {
-        // Returns the Storyboard that contains your Document window.
-        let storyboard = NSStoryboard(name: NSStoryboard.Name("Main"), bundle: nil)
-        let windowController = storyboard.instantiateController(withIdentifier: NSStoryboard.SceneIdentifier("Document Window Controller")) as! NSWindowController
-        if !windowController.isWindowLoaded {
-            windowController.loadWindow()
+    override func open(completionHandler: ((Bool) -> Void)? = nil) {
+        super.open { (success) in
+            self.storedModificationDate = self.fileModificationDate
+            completionHandler?(success)
         }
-        (windowController.contentViewController as? EditorViewController)?.document = self
-        self.addWindowController(windowController)
     }
     
-    override func data(ofType typeName: String) throws -> Data {
+    // MARK: - File presenter
+    
+    #if MAIN
+    override func presentedItemDidChange() {
+        super.presentedItemDidChange()
         
-        do {
-            return try makeData()
-        } catch {
-            throw error
+        guard fileModificationDate != storedModificationDate else {
+            return
         }
-    }
-    
-    override func read(from data: Data, ofType typeName: String) throws {
         
-        do {
-            try load(contents: data)
-        } catch {
-            throw error
+        storedModificationDate = fileModificationDate
+        
+        if let data = try? Data(contentsOf: fileURL) {
+            try? load(fromContents: data, ofType: "public.python-script")
+            DispatchQueue.main.async {
+                if self.editor?.textView.text != self.text {
+                    self.editor?.textView.text = self.text
+                }
+            }
         }
     }
-    
     #endif
 }

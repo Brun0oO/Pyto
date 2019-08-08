@@ -17,15 +17,15 @@ struct SunsetSourceCodeTheme: SourceCodeTheme {
     let defaultTheme = DefaultSourceCodeTheme()
     
     var lineNumbersStyle: LineNumbersStyle? {
-        return nil
+        return defaultTheme.lineNumbersStyle
     }
     
     var gutterStyle: GutterStyle {
-        return GutterStyle(backgroundColor: .clear, minimumWidth: 0)
+        return GutterStyle(backgroundColor: backgroundColor, minimumWidth: defaultTheme.gutterStyle.minimumWidth)
     }
     
     var font: Font {
-        return defaultTheme.font
+        return defaultTheme.font.withSize(CGFloat(ThemeFontSize))
     }
     
     let backgroundColor = Color(displayP3Red: 255/255, green: 252/255, blue: 229/255, alpha: 1)
@@ -62,8 +62,6 @@ struct SunsetSourceCodeTheme: SourceCodeTheme {
 
 // MARK: - Theme
 
-#if os(iOS)
-
 /// The Sunset theme.
 struct SunsetTheme: Theme {
     
@@ -71,7 +69,9 @@ struct SunsetTheme: Theme {
     
     let barStyle: UIBarStyle = .default
     
+    var userInterfaceStyle: UIUserInterfaceStyle {
+        return .light
+    }
+    
     let sourceCodeTheme: SourceCodeTheme = SunsetSourceCodeTheme()
 }
-
-#endif

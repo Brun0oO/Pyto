@@ -15,6 +15,9 @@ class XcodeActivity: UIActivity {
     /// The URL of the Python script to be used as entry point.
     var scriptURL: URL!
     
+    /// The View controller which is presenting the UI.
+    var viewController: UIViewController?
+    
     // MARK: - Activity
     
     override class var activityCategory: UIActivity.Category {
@@ -82,7 +85,7 @@ class XcodeActivity: UIActivity {
             let destURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(title)
             
             let activityAlert = ActivityViewController(message: "")
-            UIApplication.shared.keyWindow?.topViewController?.present(activityAlert, animated: true, completion: {
+            self.viewController?.present(activityAlert, animated: true, completion: {
                 
                 DispatchQueue.global().async {
                     do {
@@ -103,6 +106,9 @@ class XcodeActivity: UIActivity {
                             (url: self.scriptURL.deletingLastPathComponent(),
                              destination: mainURL.deletingLastPathComponent()),
                             
+                            (url: EditorViewController.directory(for: self.scriptURL.deletingLastPathComponent()),
+                             destination: mainURL.deletingLastPathComponent()),
+                            
                             (url: DocumentBrowserViewController.localContainerURL,
                              destination: destURL.appendingPathComponent("Python App").appendingPathComponent("Documents")),
                             
@@ -118,7 +124,11 @@ class XcodeActivity: UIActivity {
                             for file in ((try? FileManager.default.contentsOfDirectory(at: directory.url, includingPropertiesForKeys: nil, options: .skipsHiddenFiles)) ?? []) {
                                 
                                 if file.path != self.scriptURL.path && file.lastPathComponent != "__pycache__" {
-                                    try FileManager.default.copyItem(at: file, to: directory.destination.appendingPathComponent(file.lastPathComponent))
+                                    let dest = directory.destination.appendingPathComponent(file.lastPathComponent)
+                                    if FileManager.default.fileExists(atPath: dest.path) {
+                                        try? FileManager.default.removeItem(at: dest)
+                                    }
+                                    try FileManager.default.copyItem(at: file, to: dest)
                                 }
                             }
                         }
@@ -132,7 +142,7 @@ class XcodeActivity: UIActivity {
                             info["CFBundleDevelopmentRegion"] = "en"
                             info["CFBundleDisplayName"] = appNameTextField.text
                             info["CFBundleExecutable"] = "$(EXECUTABLE_NAME)"
-                            info["CFBundleIdentifier"] = (appOrganizationID.text ?? "your_company")+"."+(appNameTextField.text ?? "your_app")
+                            info["CFBundleIdentifier"] = (appOrganizationID.text ?? "your_company")+"."+((appNameTextField.text ?? "your_app").replacingOccurrences(of: " ", with: "-"))
                             info["CFBundleInfoDictionaryVersion"] = "6.0"
                             info["CFBundleName"] = "$(PRODUCT_NAME)"
                             info["CFBundlePackageType"] = "APPL"
@@ -151,17 +161,21 @@ class XcodeActivity: UIActivity {
                         
                         DispatchQueue.main.async {
                             activityAlert.dismiss(animated: true, completion: {
-                                let activityVC = UIActivityViewController(activityItems: [zipURL], applicationActivities: nil)
-                                activityVC.popoverPresentationController?.barButtonItem = EditorSplitViewController.visible?.editor.shareItem
-                                UIApplication.shared.keyWindow?.topViewController?.present(activityVC, animated: true, completion: nil)
+                                for console in ConsoleViewController.visibles {
+                                    let activityVC = UIActivityViewController(activityItems: [zipURL], applicationActivities: nil)
+                                    activityVC.popoverPresentationController?.barButtonItem = console.editorSplitViewController?.editor.shareItem
+                                    console.present(activityVC, animated: true, completion: nil)
+                                }
                             })
                         }
                     } catch {
                         DispatchQueue.main.async {
                             activityAlert.dismiss(animated: true, completion: {
-                                let alert = UIAlertController(title: Localizable.Errors.errorCreatingFile, message: error.localizedDescription, preferredStyle: .alert)
-                                alert.addAction(UIAlertAction(title: Localizable.cancel, style: .cancel, handler: nil))
-                                UIApplication.shared.keyWindow?.topViewController?.present(alert, animated: true, completion: nil)
+                                for console in ConsoleViewController.visibles {
+                                    let alert = UIAlertController(title: Localizable.Errors.errorCreatingFile, message: error.localizedDescription, preferredStyle: .alert)
+                                    alert.addAction(UIAlertAction(title: Localizable.cancel, style: .cancel, handler: nil))
+                                    console.present(alert, animated: true, completion: nil)
+                                }
                             })
                         }
                     }
@@ -172,7 +186,7 @@ class XcodeActivity: UIActivity {
         
         alert.addAction(UIAlertAction(title: Localizable.cancel, style: .cancel, handler: nil))
         
-        UIApplication.shared.keyWindow?.topViewController?.present(alert, animated: true, completion: nil)
+        viewController?.present(alert, animated: true, completion: nil)
         
         activityDidFinish(true)
     }

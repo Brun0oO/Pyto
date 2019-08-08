@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>XPC!</string>
 	<key>CFBundleShortVersionString</key>
-	<string>10.0.2</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
@@ -27,10 +27,10 @@
 	</dict>
 	<key>NSExtension</key>
 	<dict>
-		<key>NSExtensionMainStoryboard</key>
-		<string>MainInterface</string>
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.widget-extension</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>Pyto_Widget.ConsoleViewController</string>
 	</dict>
 </dict>
 </plist>

@@ -9,6 +9,7 @@
 import UIKit
 import SafariServices
 import MessageUI
+import NotificationCenter
 
 fileprivate extension IndexPath {
     
@@ -18,18 +19,22 @@ fileprivate extension IndexPath {
     
     static let theme = IndexPath(row: 0, section: 0)
     static let indentation = IndexPath(row: 1, section: 0)
+    static let fontSize = IndexPath(row: 2, section: 0)
+    static let showConsoleAtBottom = IndexPath(row: 3, section: 0)
+    static let showSeparator = IndexPath(row: 3, section: 0)
     
     static let todayWidget = IndexPath(row: 0, section: 1)
     
     static let documentation = IndexPath(row: 0, section: 2)
-    static let contact = IndexPath(row: 1, section: 2)
+    static let examples = IndexPath(row: 1, section: 2)
+    static let contact = IndexPath(row: 2, section: 2)
     
     static let acknowledgments = IndexPath(row: 0, section: 3)
     static let sourceCode = IndexPath(row: 1, section: 3)
 }
 
 /// A View controller with settings and info.
-class AboutTableViewController: UITableViewController, DocumentBrowserViewControllerDelegate, MFMailComposeViewControllerDelegate {
+class AboutTableViewController: UITableViewController, UIDocumentPickerDelegate, MFMailComposeViewControllerDelegate {
     
     /// The date of the build.
     var buildDate: Date {
@@ -42,7 +47,15 @@ class AboutTableViewController: UITableViewController, DocumentBrowserViewContro
     
     /// Closes this View controller.
     @IBAction func close(_ sender: Any) {
-        dismiss(animated: true, completion: nil)
+        if #available(iOS 13.0, *) {
+            if navigationController?.presentingViewController != nil {
+                dismiss(animated: true, completion: nil)
+            } else if let sceneSession = view.window?.windowScene?.session {
+                UIApplication.shared.requestSceneSessionDestruction(sceneSession, options: nil, errorHandler: nil)
+            }
+        } else if navigationController?.presentingViewController != nil {
+            dismiss(animated: true, completion: nil)
+        }
     }
     
     /// Called when indentation is set.
@@ -66,6 +79,48 @@ class AboutTableViewController: UITableViewController, DocumentBrowserViewContro
     /// The segmented control managing identation.
     @IBOutlet weak var identationSegmentedControl: UISegmentedControl!
     
+    // MARK: - Font size
+    
+    /// The label previewing the font size.
+    @IBOutlet weak var fontSizeLabel: UILabel!
+    
+    /// The stepper for setting font size.
+    @IBOutlet weak var fontSizeStepper: UIStepper!
+    
+    /// Increases or dicreases font size.
+    @IBAction func changeFontSize(_ sender: UIStepper) {
+        ThemeFontSize = Int(sender.value)
+        let label = fontSizeLabel
+        let superview = label?.superview
+        let constraints = superview?.constraints
+        label?.removeFromSuperview()
+        label?.text = "\(ThemeFontSize)px"
+        label?.font = fontSizeLabel.font.withSize(CGFloat(ThemeFontSize))
+        superview?.addSubview(label!)
+        superview?.removeConstraints(superview!.constraints)
+        superview?.addConstraints(constraints!)
+    }
+    
+    // MARK: - Show console at bottom
+
+    /// Switch for toggling console at bottom.
+    @IBOutlet weak var showConsoleAtBottom: UISwitch!
+    
+    /// Toggles console at bottom.
+    @IBAction func toggleConsoleAtBottom(_ sender: UISwitch) {
+        EditorSplitViewController.shouldShowConsoleAtBottom = sender.isOn
+    }
+    
+    // MARK: - Show separator
+    
+    /// Switch for toggling the separator between editor and console.
+    @IBOutlet weak var showSeparator: UISwitch!
+    
+    /// Toggles the separator between editor and console.
+    @IBAction func toggleSeparator(_ sender: UISwitch) {
+        EditorSplitViewController.shouldShowSeparator = sender.isOn
+    }
+        
     // MARK: - Table view controller
     
     override func viewDidLoad() {
@@ -85,20 +140,34 @@ class AboutTableViewController: UITableViewController, DocumentBrowserViewContro
         default:
             identationSegmentedControl.selectedSegmentIndex = 0
         }
+        
+        fontSizeStepper.value = Double(ThemeFontSize)
+        fontSizeLabel.text = "\(ThemeFontSize)px"
+        fontSizeLabel.font = fontSizeLabel.font.withSize(CGFloat(ThemeFontSize))
+        showConsoleAtBottom.isOn = EditorSplitViewController.shouldShowConsoleAtBottom
+        showSeparator.isOn = EditorSplitViewController.shouldShowSeparator
+    }
+    
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        
+        if #available(iOS 13.0, *) {
+            view.window?.windowScene?.title = title
+        }
     }
     
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         
         let cell = super.tableView(tableView, cellForRowAt: indexPath)
-        cell.backgroundColor = ConsoleViewController.choosenTheme.sourceCodeTheme.backgroundColor
-        cell.textLabel?.textColor = ConsoleViewController.choosenTheme.sourceCodeTheme.color(for: .plain)
-        cell.detailTextLabel?.textColor = ConsoleViewController.choosenTheme.sourceCodeTheme.color(for: .plain)
         
         if indexPath == .todayWidget {
-            cell.detailTextLabel?.text = (UserDefaults.standard.string(forKey: "todayWidgetScriptPath") as NSString?)?.lastPathComponent
-        } else if indexPath == .indentation {
-            for view in cell.contentView.subviews {
-                (view as? UILabel)?.textColor = ConsoleViewController.choosenTheme.sourceCodeTheme.color(for: .plain)
+            var isStale = false
+            if let lastPathComponent = (UserDefaults.standard.string(forKey: "todayWidgetScriptPath") as NSString?)?.lastPathComponent {
+                cell.detailTextLabel?.text = lastPathComponent
+            } else if let data = UserDefaults.standard.data(forKey: "todayWidgetScriptPath"), let url = (try? URL(resolvingBookmarkData: data, bookmarkDataIsStale: &isStale)) {
+                cell.detailTextLabel?.text = url.lastPathComponent
+            } else {
+                cell.detailTextLabel?.text = ""
             }
         }
         
@@ -113,17 +182,17 @@ class AboutTableViewController: UITableViewController, DocumentBrowserViewContro
         case .theme:
             viewControllerToPresent = UIStoryboard(name: "Theme Chooser", bundle: Bundle.main).instantiateInitialViewController()
         case .todayWidget:
-            guard let browser = UIStoryboard(name: "Main", bundle: nil).instantiateViewController(withIdentifier: "Browser") as? DocumentBrowserViewController else {
-                return
-            }
-            browser.delegate = self
-            viewControllerToPresent = browser
+            let picker = UIDocumentPickerViewController(documentTypes: ["public.python-script"], in: .open)
+            picker.delegate = self
+            viewControllerToPresent = picker
         case .documentation:
             viewControllerToPresent = ThemableNavigationController(rootViewController: DocumentationViewController())
+        case .examples:
+            viewControllerToPresent = SFSafariViewController(url: URL(string: "https://github.com/ColdGrub1384/Pyto/tree/master/Pyto/Samples")!)
         case .contact:
             let controller = MFMailComposeViewController()
             controller.setSubject("Pyto - Contact")
-            controller.setToRecipients(["adri_labbe@hotmail.com"])
+            controller.setToRecipients(["adrian@develobile.com"])
             controller.mailComposeDelegate = self
             viewControllerToPresent = controller
         case .acknowledgments:
@@ -141,7 +210,11 @@ class AboutTableViewController: UITableViewController, DocumentBrowserViewContro
         }
         
         if indexPath == .theme || indexPath == .todayWidget {
-            navigationController?.pushViewController(vc, animated: true)
+            if vc is UIDocumentPickerViewController {
+                present(vc, animated: true, completion: nil)
+            } else {
+                navigationController?.pushViewController(vc, animated: true)
+            }
         } else {
             present(vc, animated: true, completion: nil)
         }
@@ -167,13 +240,21 @@ class AboutTableViewController: UITableViewController, DocumentBrowserViewContro
     
     // MARK: - Document browser view controller delegate
     
-    func documentBrowserViewController(_ documentBrowserViewController: DocumentBrowserViewController, didPickScriptAtPath path: String) {
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        
+        _ = urls[0].startAccessingSecurityScopedResource()
         
         navigationController?.popToRootViewController(animated: true)
         
-        UserDefaults.standard.set(RelativePathForScript(URL(fileURLWithPath: path)), forKey: "todayWidgetScriptPath")
+        do {
+            UserDefaults.standard.set(try urls[0].bookmarkData(), forKey: "todayWidgetScriptPath")
+        } catch {
+            print(error.localizedDescription)
+        }
         UserDefaults.standard.synchronize()
         (UIApplication.shared.delegate as? AppDelegate)?.copyModules()
+        
+        NCWidgetController().setHasContent(true, forWidgetWithBundleIdentifier: Bundle.main.bundleIdentifier!+".Pyto-Widget")
         
         tableView.reloadData()
     }

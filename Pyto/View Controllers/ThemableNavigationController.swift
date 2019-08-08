@@ -27,22 +27,9 @@ class ThemableNavigationController: UINavigationController, UINavigationControll
     }
     
     /// Called when the user choosed a theme.
-    @objc func themeDidChanged(_ notification: Notification) {
+    @objc func themeDidChange(_ notification: Notification?) {
         setup(theme: ConsoleViewController.choosenTheme)
-        
-        if let currentBrowser = visibleViewController as? DocumentBrowserViewController, let storyboard = self.storyboard, let browser = storyboard.instantiateViewController(withIdentifier: "Browser") as? DocumentBrowserViewController {
-            
-            if currentBrowser.directory != DocumentBrowserViewController.localContainerURL {
-                browser.directory = currentBrowser.directory
-            } else {
-                browser.setDirectory(currentBrowser.directory)
-            }
-            
-            var vcs = viewControllers
-            vcs.removeLast()
-            vcs.append(browser)
-            viewControllers = vcs
-        }
+        setNeedsStatusBarAppearanceUpdate()
     }
     
     deinit {
@@ -54,7 +41,15 @@ class ThemableNavigationController: UINavigationController, UINavigationControll
     override func viewDidLoad() {
         super.viewDidLoad()
         
-        NotificationCenter.default.addObserver(self, selector: #selector(themeDidChanged(_:)), name: ThemeDidChangeNotification, object: nil)
+        view.accessibilityIgnoresInvertColors = true
+        
+        NotificationCenter.default.addObserver(self, selector: #selector(themeDidChange(_:)), name: ThemeDidChangeNotification, object: nil)
+    }
+    
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        
+        themeDidChange(nil)
     }
     
     override func viewWillAppear(_ animated: Bool) {
@@ -62,18 +57,29 @@ class ThemableNavigationController: UINavigationController, UINavigationControll
         
         setup(theme: ConsoleViewController.choosenTheme)
         
-        navigationBar.isTranslucent = false
-        navigationBar.shadowImage = UIImage()
-        toolbar.setShadowImage(UIImage(), forToolbarPosition: .any)
-        toolbar.isTranslucent = false
-        
         delegate = self
+    }
+    
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        if isDarkModeEnabled {
+            if navigationBar.barStyle == .black {
+                return .default
+            } else {
+                return .lightContent
+            }
+        } else {
+            return super.preferredStatusBarStyle
+        }
     }
     
     // MARK: - Navigation controller delegate
     
     func navigationController(_ navigationController: UINavigationController, willShow viewController: UIViewController, animated: Bool) {
         
-        viewController.view.backgroundColor = ConsoleViewController.choosenTheme.sourceCodeTheme.backgroundColor
+        if #available(iOS 13.0, *) {
+            viewController.view.backgroundColor = .systemBackground
+        } else {
+            viewController.view.backgroundColor = ConsoleViewController.choosenTheme.sourceCodeTheme.backgroundColor
+        }
     }
 }

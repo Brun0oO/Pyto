@@ -11,6 +11,7 @@ import SavannaKit
 import SourceEditor
 
 /// A View controller for choosing a theme.
+@available(*, deprecated, message: "Use dialog instead.")
 class ThemeChooserTableViewController: UITableViewController, SyntaxTextViewDelegate {
     
     /// Closes this View controller.
@@ -19,6 +20,20 @@ class ThemeChooserTableViewController: UITableViewController, SyntaxTextViewDele
     }
     
     // MARK: - Table view controller
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        
+        view.accessibilityIgnoresInvertColors = true
+    }
+    
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        
+        if #available(iOS 13.0, *) {
+            view.backgroundColor = UIColor.systemBackground
+        }
+        tableView.reloadData()
+    }
     
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         return Themes.count
@@ -50,7 +65,7 @@ class ThemeChooserTableViewController: UITableViewController, SyntaxTextViewDele
         
         sleep(1)
         
-        print("Bye!")
+        print("Bye!") # Comment
         """
         
         textView.theme = ReadonlyTheme(theme.sourceCodeTheme)
@@ -65,9 +80,8 @@ class ThemeChooserTableViewController: UITableViewController, SyntaxTextViewDele
     }
     
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        dismiss(animated: true) {
-            ConsoleViewController.choosenTheme = Themes[indexPath.row].value
-        }
+        navigationController?.popViewController(animated: true)
+        ConsoleViewController.choosenTheme = Themes[indexPath.row].value
     }
     
     // MARK: - Syntax text view delegate

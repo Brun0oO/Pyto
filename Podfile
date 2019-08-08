@@ -12,18 +12,7 @@ target 'Pyto' do
   pod 'SplitKit', :git => 'https://github.com/ColdGrub1384/SplitKit.git'
   pod 'SourceEditor', :git => 'https://github.com/ColdGrub1384/source-editor.git'
   pod 'Zip'
-  pod 'Down'
-end
-
-target 'Pyto Mac' do
-  # Comment the next line if you're not using Swift and don't want to use dynamic frameworks
-  use_frameworks!
-
-  # Pods for Pyto Mac
-
-  pod 'SourceEditor', :git => 'https://github.com/ColdGrub1384/source-editor.git'
-  pod 'Down'
-  pod 'OpenSSL-Static', '1.0.2.c1'
+  pod 'Down', :git => 'https://github.com/ColdGrub1384/Down.git'
 end
 
 # post install

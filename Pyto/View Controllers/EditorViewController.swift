@@ -83,7 +83,7 @@ fileprivate func parseArgs(_ args: inout [String]) {
 
 
 /// The View controller used to edit source code.
-@objc class EditorViewController: UIViewController, SyntaxTextViewDelegate, InputAssistantViewDelegate, InputAssistantViewDataSource, UITextViewDelegate, UISearchBarDelegate {
+@objc class EditorViewController: UIViewController, SyntaxTextViewDelegate, InputAssistantViewDelegate, InputAssistantViewDataSource, UITextViewDelegate, UISearchBarDelegate, UIDocumentPickerDelegate {
     
     /// Returns string used for indentation
     static var indentation: String {
@@ -100,41 +100,33 @@ fileprivate func parseArgs(_ args: inout [String]) {
     /// The `SyntaxTextView` containing the code.
     let textView = SyntaxTextView()
     
-    /// The document URL to be edited.
-    var document: URL?
+    /// The document to be edited.
+    @objc var document: PyDocument? {
+        didSet {
+            
+            loadViewIfNeeded()
+            
+            document?.editor = self
+            
+            textView.contentTextView.isEditable = !(document?.documentState == .editingDisabled)
+            
+            NotificationCenter.default.addObserver(self, selector: #selector(stateChanged(_:)), name: UIDocument.stateChangedNotification, object: document)
+        }
+    }
     
     /// Returns `true` if the opened file is a sample.
     var isSample: Bool {
         guard document != nil else {
             return true
         }
-        return !FileManager.default.isWritableFile(atPath: document!.path)
+        return !FileManager.default.isWritableFile(atPath: document!.fileURL.path)
     }
     
     /// The Input assistant view containing `suggestions`.
     let inputAssistant = InputAssistantView()
     
     /// A Navigation controller containing the documentation.
-    var documentationNavigationController: ThemableNavigationController?
-    
-    /// Shows documentation
-    @objc func showDocs(_ sender: UIBarButtonItem) {
-        if documentationNavigationController == nil {
-            documentationNavigationController = ThemableNavigationController(rootViewController: DocumentationViewController())
-        }
-        documentationNavigationController?.modalPresentationStyle = .popover
-        documentationNavigationController?.popoverPresentationController?.backgroundColor = ConsoleViewController.choosenTheme.sourceCodeTheme.backgroundColor
-        documentationNavigationController?.popoverPresentationController?.barButtonItem = sender
-        documentationNavigationController?.preferredContentSize = CGSize(width: 400, height: 400)
-        present(documentationNavigationController!, animated: true, completion: nil)
-    }
-    
-    /// Inserts two spaces.
-    @objc func insertTab() {
-        textView.contentTextView.insertText(EditorViewController.indentation)
-    }
-    
-    private var isSaving = false
+    var documentationNavigationController: UINavigationController?
     
     private var isDocOpened = false
     
@@ -142,18 +134,106 @@ fileprivate func parseArgs(_ args: inout [String]) {
     var lineNumberError: Int?
     
     /// Arguments passed to the script.
-    var args = ""
+    var args: String {
+        get {
+            return UserDefaults.standard.string(forKey: "arguments\(document?.fileURL.path.replacingOccurrences(of: "//", with: "/") ?? "")") ?? ""
+        }
+        
+        set {
+            UserDefaults.standard.set(newValue, forKey: "arguments\(document?.fileURL.path.replacingOccurrences(of: "//", with: "/") ?? "")")
+        }
+    }
+    
+    /// Obtains the current directory URL set for the given script.
+    ///
+    /// - Parameters:
+    ///     - scriptURL: The URL of the script.
+    ///
+    /// - Returns: The current directory set for the given script.
+    static func directory(for scriptURL: URL) -> URL {
+        var isStale = false
+        
+        let defaultDir = scriptURL.deletingLastPathComponent()
+        
+        guard let data = try? scriptURL.extendedAttribute(forName: "currentDirectory") else {
+            return defaultDir
+        }
+        
+        guard let url = try? URL(resolvingBookmarkData: data, bookmarkDataIsStale: &isStale) else {
+            return defaultDir
+        }
+        
+        _ = url.startAccessingSecurityScopedResource()
+        
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
+            return defaultDir
+        }
+        
+        return url
+    }
+    
+    /// Directory in which the script will be ran.
+    var currentDirectory: URL {
+        get {
+            if let url = document?.fileURL {
+                return EditorViewController.directory(for: url)
+            } else {
+                return DocumentBrowserViewController.localContainerURL
+            }
+        }
+        
+        set {
+            func _set() {
+                guard newValue != document?.fileURL.deletingLastPathComponent() else {
+                    if (try? document?.fileURL.extendedAttribute(forName: "currentDirectory")) != nil {
+                        do {
+                            try document?.fileURL.removeExtendedAttribute(forName: "currentDirectory")
+                        } catch {
+                            print(error.localizedDescription)
+                        }
+                    }
+                    return
+                }
+                
+                if let data = try? newValue.bookmarkData() {
+                    do {
+                        try document?.fileURL.setExtendedAttribute(data: data, forName: "currentDirectory")
+                    } catch {
+                        print(error.localizedDescription)
+                    }
+                }
+            }
+            
+            DispatchQueue.global().async(execute: _set)
+        }
+    }
     
     /// Set to `true` before presenting to run the code.
     var shouldRun = false
     
+    /// Handles state changes on a document..
+    @objc func stateChanged(_ notification: Notification) {
+        textView.contentTextView.isEditable = !(document?.documentState == .editingDisabled)
+        
+        save { (_) in
+            self.document?.checkForConflicts(onViewController: self, completion: {
+                if let doc = self.document, let data = try? Data(contentsOf: doc.fileURL) {
+                    try? doc.load(fromContents: data, ofType: "public.python-script")
+                    self.textView.text = doc.text
+                }
+            })
+        }
+    }
+    
     /// Initialize with given document.
     ///
     /// - Parameters:
-    ///     - document: The document URL to be edited.
-    init(document: URL) {
+    ///     - document: The document to be edited.
+    init(document: PyDocument) {
         super.init(nibName: nil, bundle: nil)
         self.document = document
+        self.document?.editor = self
     }
     
     required init?(coder aDecoder: NSCoder) {
@@ -171,9 +251,6 @@ fileprivate func parseArgs(_ args: inout [String]) {
     /// The bar button item for showing docs.
     var docItem: UIBarButtonItem!
     
-    /// The bar button item for setting arguments.
-    var argsItem: UIBarButtonItem!
-    
     /// The bar button item for sharing the script.
     var shareItem: UIBarButtonItem!
     
@@ -182,6 +259,9 @@ fileprivate func parseArgs(_ args: inout [String]) {
     
     /// Button for going back to scripts.
     var scriptsItem: UIBarButtonItem!
+    
+    /// Button for debugging script.
+    var debugItem: UIBarButtonItem!
     
     // MARK: - Theme
     
@@ -195,20 +275,25 @@ fileprivate func parseArgs(_ args: inout [String]) {
         
         let text = textView.text
         textView.delegate = nil
-        textView.text = ""
         textView.delegate = self
         textView.theme = theme.sourceCodeTheme
         textView.contentTextView.textColor = theme.sourceCodeTheme.color(for: .plain)
-        textView.contentTextView.keyboardAppearance = theme.keyboardAppearance
+        if traitCollection.userInterfaceStyle == .dark {
+            textView.contentTextView.keyboardAppearance = .dark
+        } else {
+            textView.contentTextView.keyboardAppearance = theme.keyboardAppearance
+        }
         textView.text = text
         
-        inputAssistant.leadingActions = [InputAssistantAction(image: "⇥".image() ?? UIImage(), target: self, action: #selector(insertTab))]
+        inputAssistant.leadingActions = (UIApplication.shared.statusBarOrientation.isLandscape ? [InputAssistantAction(image: UIImage())] : [])+[InputAssistantAction(image: "⇥".image() ?? UIImage(), target: self, action: #selector(insertTab))]
         inputAssistant.attach(to: textView.contentTextView)
-        inputAssistant.trailingActions = [InputAssistantAction(image: EditorSplitViewController.downArrow, target: textView.contentTextView, action: #selector(textView.contentTextView.resignFirstResponder))]
+        inputAssistant.trailingActions = [InputAssistantAction(image: EditorSplitViewController.downArrow, target: textView.contentTextView, action: #selector(textView.contentTextView.resignFirstResponder))]+(UIApplication.shared.statusBarOrientation.isLandscape ? [InputAssistantAction(image: UIImage())] : [])
+        
+        (textView.contentTextView.value(forKey: "textInputTraits") as? NSObject)?.setValue(theme.tintColor, forKey: "insertionPointColor")
     }
     
     /// Called when the user choosed a theme.
-    @objc func themeDidChange(_ notification: Notification) {
+    @objc func themeDidChange(_ notification: Notification?) {
         setup(theme: ConsoleViewController.choosenTheme)
     }
     
@@ -219,6 +304,10 @@ fileprivate func parseArgs(_ args: inout [String]) {
         
         NotificationCenter.default.addObserver(self, selector: #selector(themeDidChange(_:)), name: ThemeDidChangeNotification, object: nil)
         
+        if #available(iOS 13.0, *) {
+            view.backgroundColor = .systemBackground
+        }
+        
         view.addSubview(textView)
         textView.delegate = self
         textView.contentTextView.delegate = self
@@ -226,53 +315,76 @@ fileprivate func parseArgs(_ args: inout [String]) {
         inputAssistant.dataSource = self
         inputAssistant.delegate = self
         
-        parent?.title = document?.deletingPathExtension().lastPathComponent
+        parent?.title = document?.fileURL.deletingPathExtension().lastPathComponent
         
-        if document == URL(fileURLWithPath: NSTemporaryDirectory()+"/Temporary") {
+        if document?.fileURL == URL(fileURLWithPath: NSTemporaryDirectory()+"/Temporary") {
             title = nil
         }
         
-        argsItem = UIBarButtonItem(title: "args", style: .plain, target: self, action: #selector(setArgs(_:)))
         runBarButtonItem = UIBarButtonItem(barButtonSystemItem: .play, target: self, action: #selector(run))
         stopBarButtonItem = UIBarButtonItem(barButtonSystemItem: .stop, target: self, action: #selector(stop))
         
         let debugButton = UIButton(frame: CGRect(x: 0, y: 0, width: 30, height: 30))
         debugButton.addTarget(self, action: #selector(debug), for: .touchUpInside)
-        let debugItem = UIBarButtonItem(image: UIImage(named: "Debug"), style: .plain, target: self, action: #selector(debug))
+        debugItem = UIBarButtonItem(image: EditorSplitViewController.debugImage, style: .plain, target: self, action: #selector(debug))
         
         let scriptsButton = UIButton(frame: CGRect(x: 0, y: 0, width: 30, height: 30))
-        scriptsButton.setImage(UIImage(named: "Grid"), for: .normal)
+        scriptsButton.setImage(EditorSplitViewController.gridImage, for: .normal)
         scriptsButton.addTarget(self, action: #selector(close), for: .touchUpInside)
         scriptsItem = UIBarButtonItem(customView: scriptsButton)
         
         let searchButton = UIButton(frame: CGRect(x: 0, y: 0, width: 30, height: 30))
-        searchButton.setImage(UIImage(imageLiteralResourceName: "search"), for: .normal)
+        if #available(iOS 13.0, *) {
+            searchButton.setImage(UIImage(systemName: "magnifyingglass"), for: .normal)
+        } else {
+            searchButton.setImage(UIImage(named: "Search"), for: .normal)
+        }
         searchButton.addTarget(self, action: #selector(search), for: .touchUpInside)
         searchItem = UIBarButtonItem(customView: searchButton)
         
         docItem = UIBarButtonItem(barButtonSystemItem: .bookmarks, target: self, action: #selector(showDocs(_:)))
         shareItem = UIBarButtonItem(barButtonSystemItem: .action, target: self, action: #selector(share(_:)))
+        let moreItem = UIBarButtonItem(image: EditorSplitViewController.threeDotsImage, style: .plain, target: self, action: #selector(showEditorScripts(_:)))
+        let runtimeItem = UIBarButtonItem(image: EditorSplitViewController.gearImage, style: .plain, target: self, action: #selector(showRuntimeSettings(_:)))
         
-        if Python.shared.isScriptRunning {
-            parent?.navigationItem.rightBarButtonItems = [
-                stopBarButtonItem,
-                debugItem,
-            ]
-        } else {
-            parent?.navigationItem.rightBarButtonItems = [
-                runBarButtonItem,
-                debugItem,
-            ]
+        if !(parent is REPLViewController) && !(parent is RunModuleViewController) && !(parent is PipInstallerViewController) {
+            if let path = document?.fileURL.path, Python.shared.isScriptRunning(path) {
+                parent?.navigationItem.rightBarButtonItems = [
+                    stopBarButtonItem,
+                    debugItem,
+                ]
+            } else {
+                parent?.navigationItem.rightBarButtonItems = [
+                    runBarButtonItem,
+                    debugItem,
+                ]
+            }
+            parent?.navigationItem.leftBarButtonItems = [scriptsItem, searchItem]
         }
-        parent?.navigationItem.leftBarButtonItems = [scriptsItem, searchItem]
         
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillShow), name: UIResponder.keyboardWillShowNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidShow), name: UIResponder.keyboardDidShowNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide), name: UIResponder.keyboardWillHideNotification, object: nil)
         
         textView.contentTextView.isEditable = !isSample
         
+        let space = UIBarButtonItem(barButtonSystemItem: .fixedSpace, target: nil, action: nil)
+        space.width = 10
+        
         parent?.navigationController?.isToolbarHidden = false
-        parent?.toolbarItems = [shareItem, docItem, UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil), argsItem]
+        parent?.toolbarItems = [
+            shareItem,
+            moreItem,
+            space,
+            docItem,
+            UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
+            runtimeItem
+        ]
+    }
+    
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        
+        themeDidChange(nil)
     }
     
     override func viewWillAppear(_ animated: Bool) {
@@ -287,9 +399,11 @@ fileprivate func parseArgs(_ args: inout [String]) {
                 return
             }
             
-            self.textView.text = (try? String(contentsOf: doc)) ?? ""
+            let path = doc.fileURL.path
             
-            if !FileManager.default.isWritableFile(atPath: doc.path) {
+            self.textView.text = document?.text ?? ""
+            
+            if !FileManager.default.isWritableFile(atPath: doc.fileURL.path) {
                 self.navigationItem.leftBarButtonItem = nil
                 self.textView.contentTextView.isEditable = false
                 self.textView.contentTextView.inputAccessoryView = nil
@@ -297,12 +411,61 @@ fileprivate func parseArgs(_ args: inout [String]) {
             
             if self.shouldRun {
                 self.shouldRun = false
-                self.run()
+                
+                if Python.shared.isScriptRunning(path) {
+                    self.stop()
+                }
+                
+                let splitVC = self.parent as? EditorSplitViewController
+                
+                splitVC?.ratio = 0
+                
+                for view in (splitVC?.view.subviews ?? []) {
+                    if view.backgroundColor == .white {
+                        view.backgroundColor = splitVC?.view.backgroundColor
+                    }
+                }
+                
+                splitVC?.firstChild?.view.superview?.backgroundColor = splitVC!.view.backgroundColor
+                splitVC?.secondChild?.view.superview?.backgroundColor = splitVC!.view.backgroundColor
+                
+                DispatchQueue.main.asyncAfter(deadline: .now()+0.25, execute: {
+                    splitVC?.firstChild = nil
+                    splitVC?.secondChild = nil
+                    
+                    for view in (splitVC?.view.subviews ?? []) {
+                        view.removeFromSuperview()
+                    }
+                    
+                    splitVC?.viewDidLoad()
+                    splitVC?.viewWillTransition(to: splitVC!.view.frame.size, with: ViewControllerTransitionCoordinator())
+                    splitVC?.viewDidAppear(true)
+                    
+                    splitVC?.removeGestures()
+                    
+                    splitVC?.firstChild = splitVC?.editor
+                    splitVC?.secondChild = splitVC?.console
+                    
+                    splitVC?.setNavigationBarItems()
+                })
+                
+                if Python.shared.isScriptRunning(path) || Python.shared.version.isEmpty {
+                    _ = Timer.scheduledTimer(withTimeInterval: 1, repeats: true, block: { (timer) in
+                        if !Python.shared.isScriptRunning(path) && !Python.shared.version.isEmpty {
+                            timer.invalidate()
+                            self.run()
+                        }
+                    })
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now()+1) {
+                        self.run()
+                    }
+                }
             }
             
-            if doc.path == Bundle.main.path(forResource: "installer", ofType: "py") {
-                self.parent?.navigationItem.leftBarButtonItems = [self.scriptsItem]
-                if Python.shared.isScriptRunning {
+            if doc.fileURL.path == Bundle.main.path(forResource: "installer", ofType: "py") && (!(parent is REPLViewController) && !(parent is RunModuleViewController) && !(parent is PipInstallerViewController)) {
+                self.parent?.navigationItem.leftBarButtonItems = []
+                if Python.shared.isScriptRunning(path) {
                     self.parent?.navigationItem.rightBarButtonItems = [self.stopBarButtonItem]
                 } else {
                     self.parent?.navigationItem.rightBarButtonItems = [self.runBarButtonItem]
@@ -311,39 +474,38 @@ fileprivate func parseArgs(_ args: inout [String]) {
             
             // Siri shortcut
             
-            if #available(iOS 12.0, *) {
+            if #available(iOS 12.0, *), doc.fileURL != Bundle.main.url(forResource: "installer", withExtension: "py") && !doc.fileURL.path.hasSuffix(".repl.py") {
                 let filePath: String?
-                if let url = document {
-                    filePath = RelativePathForScript(url)
+                if let doc = document {
+                    filePath = RelativePathForScript(doc.fileURL)
                 } else {
                     filePath = nil
                 }
                 
                 let attributes = CSSearchableItemAttributeSet(itemContentType: "public.item")
-                attributes.contentDescription = document?.lastPathComponent
+                attributes.contentDescription = document?.fileURL.lastPathComponent
                 attributes.kind = "Python Script"
                 let activity = NSUserActivity(activityType: "ch.marcela.ada.Pyto.script")
-                activity.title = "Run \(title ?? document?.deletingPathExtension().lastPathComponent ?? "script")"
+                activity.title = "Run \(title ?? document?.fileURL.deletingPathExtension().lastPathComponent ?? "script")"
                 activity.contentAttributeSet = attributes
                 activity.isEligibleForSearch = true
                 activity.isEligibleForPrediction = true
                 activity.isEligibleForHandoff = false
                 activity.keywords = ["python", "pyto", "run", "script", title ?? "Untitled"]
                 activity.requiredUserInfoKeys = ["filePath"]
-                activity.persistentIdentifier = filePath
                 attributes.relatedUniqueIdentifier = filePath
                 attributes.identifier = filePath
                 attributes.domainIdentifier = filePath
                 userActivity = activity
-                if let path = filePath {
-                    activity.addUserInfoEntries(from: ["filePath" : path])
-                    activity.suggestedInvocationPhrase = document?.deletingPathExtension().lastPathComponent
+                if let d = try? document?.fileURL.bookmarkData(), let data = d {
+                    activity.addUserInfoEntries(from: ["filePath" : data])
+                    activity.suggestedInvocationPhrase = document?.fileURL.deletingPathExtension().lastPathComponent
                 }
             }
             
-            if Python.shared.isScriptRunning {
+            /*if Python.shared.isScriptRunning {
                 Python.shared.stop()
-            }
+            }*/
         }
     }
     
@@ -351,6 +513,12 @@ fileprivate func parseArgs(_ args: inout [String]) {
         super.viewDidAppear(animated)
         
         textView.frame = view.safeAreaLayoutGuide.layoutFrame
+    }
+    
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        
+        save()
     }
     
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
@@ -368,9 +536,9 @@ fileprivate func parseArgs(_ args: inout [String]) {
             self.updateBreakpointMarkersPosition()
         }
         
-        guard view.frame.height != size.height else {
+        guard (view.frame.height != size.height) || (textView.contentTextView.isFirstResponder && textView.frame.height != view.safeAreaLayoutGuide.layoutFrame.height) else {
             DispatchQueue.main.asyncAfter(deadline: .now()+0.5) {
-                self.textView.frame.size.width = self.view.safeAreaLayoutGuide.layoutFrame.width
+                self.textView.frame = self.view.safeAreaLayoutGuide.layoutFrame
             }
             return
         }
@@ -382,7 +550,27 @@ fileprivate func parseArgs(_ args: inout [String]) {
             if wasFirstResponder {
                 self.textView.contentTextView.becomeFirstResponder()
             }
+            self.setup(theme: ConsoleViewController.choosenTheme)
         }) // TODO: Anyway to to it without a timer?
+    }
+    
+    override var canBecomeFirstResponder: Bool {
+        return true
+    }
+    
+    override var keyCommands: [UIKeyCommand]? {
+        if textView.contentTextView.isFirstResponder {
+            var commands = [
+                UIKeyCommand(input: "c", modifierFlags: [.command, .shift], action: #selector(toggleComment), discoverabilityTitle: Localizable.MenuItems.toggleComment),
+                UIKeyCommand(input: "b", modifierFlags: [.command, .shift], action: #selector(setBreakpoint(_:)), discoverabilityTitle: Localizable.MenuItems.breakpoint)
+            ]
+            if suggestions.count > 0 {
+                commands.append(UIKeyCommand(input: "\t", modifierFlags: [.shift], action: #selector(nextSuggestion), discoverabilityTitle: Localizable.nextSuggestion))
+            }
+            return commands
+        } else {
+            return []
+        }
     }
     
     // MARK: - Searching
@@ -404,7 +592,7 @@ fileprivate func parseArgs(_ args: inout [String]) {
         didSet {
             
             textView.contentInset.top = findBarHeight
-            textView.contentTextView.scrollIndicatorInsets.top = findBarHeight
+            textView.contentTextView.verticalScrollIndicatorInsets.top = findBarHeight
             
             if replace {
                 if let replaceView = Bundle.main.loadNibNamed("Replace", owner: nil, options: nil)?.first as? ReplaceView {
@@ -483,7 +671,7 @@ fileprivate func parseArgs(_ args: inout [String]) {
             searchBar.removeFromSuperview()
             searchBar.resignFirstResponder()
             textView.contentInset.top = 0
-            textView.contentTextView.scrollIndicatorInsets.top = 0
+            textView.contentTextView.verticalScrollIndicatorInsets.top = 0
             
             let text = textView.text
             textView.delegate = nil
@@ -532,7 +720,7 @@ fileprivate func parseArgs(_ args: inout [String]) {
         searchBar.becomeFirstResponder()
         
         textView.contentInset.top = findBarHeight
-        textView.contentTextView.scrollIndicatorInsets.top = findBarHeight
+        textView.contentTextView.verticalScrollIndicatorInsets.top = findBarHeight
     }
     
     /// Highlights search results.
@@ -596,9 +784,62 @@ fileprivate func parseArgs(_ args: inout [String]) {
     
     // MARK: - Actions
     
+    @objc func showEditorScripts(_ sender: UIBarButtonItem) {
+        
+        class NavigationController: UINavigationController {
+            
+            var editor: EditorViewController?
+            
+            override func viewWillDisappear(_ animated: Bool) {
+                super.viewWillDisappear(animated)
+                
+                if let doc = editor?.document, let data = try? Data(contentsOf: doc.fileURL) {
+                    try? doc.load(fromContents: data, ofType: "public.python-script")
+                    editor?.textView.text = doc.text
+                }
+            }
+        }
+        
+        guard let fileURL = document?.fileURL else {
+            return
+        }
+        
+        save { (success) in
+            
+            func presentPopover() {
+                DispatchQueue.main.async {
+                    let tableVC = EditorActionsTableViewController(scriptURL: fileURL)
+                    tableVC.editor = self
+                    let vc = NavigationController(rootViewController: tableVC)
+                    vc.editor = self
+                    vc.modalPresentationStyle = .popover
+                    vc.popoverPresentationController?.barButtonItem = sender
+                    vc.popoverPresentationController?.delegate = tableVC
+                    
+                    self.present(vc, animated: true, completion: nil)
+                }
+            }
+            
+            guard success else {
+                DispatchQueue.main.async {
+                    let alert = UIAlertController(title: Localizable.Errors.errorWrittingToScript, message: nil, preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: Localizable.cancel, style: .cancel, handler: { (_) in
+                        presentPopover()
+                    }))
+                    self.present(alert, animated: true, completion: nil)
+                }
+                return
+            }
+            
+            presentPopover()
+        }
+    }
+    
     /// Shares the current script.
     @objc func share(_ sender: UIBarButtonItem) {
-        let activityVC = UIActivityViewController(activityItems: [document as Any], applicationActivities: [XcodeActivity()])
+        let xcodeActivtiy = XcodeActivity()
+        xcodeActivtiy.viewController = self
+        let activityVC = UIActivityViewController(activityItems: [document?.fileURL as Any], applicationActivities: [xcodeActivtiy])
         activityVC.popoverPresentationController?.barButtonItem = sender
         present(activityVC, animated: true, completion: nil)
     }
@@ -643,22 +884,45 @@ fileprivate func parseArgs(_ args: inout [String]) {
         present(alert, animated: true, completion: nil)
     }
     
+    /// Opens an alert for setting current directory.
+    @objc func setCwd(_ sender: Any) {
+        
+        let alert = UIAlertController(title: Localizable.CurrentDirectoryAlert.title, message: Localizable.CurrentDirectoryAlert.message+"\n\n\(ShortenFilePaths(in: currentDirectory.path)) \(FileManager.default.isReadableFile(atPath: currentDirectory.path) ? Localizable.CurrentDirectoryAlert.readable : Localizable.CurrentDirectoryAlert.notReadable)", preferredStyle: .alert)
+        
+        alert.addAction(UIAlertAction(title: Localizable.change, style: .default, handler: { _ in
+            let picker = UIDocumentPickerViewController(documentTypes: ["public.folder"], in: .open)
+            picker.delegate = self
+            if #available(iOS 13.0, *) {
+                picker.directoryURL = self.currentDirectory
+            }
+            self.present(picker, animated: true, completion: nil)
+        }))
+        
+        alert.addAction(UIAlertAction(title: Localizable.cancel, style: .cancel, handler: nil))
+        
+        present(alert, animated: true, completion: nil)
+    }
+    
     /// Stops the current running script.
     @objc func stop() {
         
-        func stop_() {
-            Python.shared.stop()
-            ConsoleViewController.visible.textView.resignFirstResponder()
-            ConsoleViewController.visible.textView.isEditable = false
+        guard let path = document?.fileURL.path else {
+            return
         }
         
-        if ConsoleViewController.isMainLoopRunning {
-            ConsoleViewController.visible.closePresentedViewController()
-            DispatchQueue.main.asyncAfter(deadline: .now()+0.5) {
+        for console in ConsoleViewController.visibles {
+            func stop_() {
+                Python.shared.stop(script: path)
+                console.textView.resignFirstResponder()
+            }
+            
+            if console.presentedViewController != nil {
+                console.dismiss(animated: true) {
+                    stop_()
+                }
+            } else {
                 stop_()
             }
-        } else {
-            stop_()
         }
     }
     
@@ -669,63 +933,67 @@ fileprivate func parseArgs(_ args: inout [String]) {
     
     /// Runs script.
     @objc func run() {
+        textView.contentTextView.resignFirstResponder()
         runScript(debug: false)
     }
     
     /// Run the script represented by `document`.
     ///
     /// - Parameters:
-    ///     -
+    ///     - debug: Set to `true` for debugging with `pdb`.
     func runScript(debug: Bool) {
+        
+        textView.contentTextView.resignFirstResponder()
         
         // For error handling
         textView.delegate = nil
         textView.delegate = self
         
-        save { (_) in            
+        guard let path = document?.fileURL.path else {
+            return
+        }
+        
+        guard Python.shared.isSetup else {
+            return
+        }
+        
+        save { (_) in
             var arguments = self.args.components(separatedBy: " ")
             parseArgs(&arguments)
             Python.shared.args = arguments
+            Python.shared.currentWorkingDirectory = self.currentDirectory.path
+            
+            guard let console = (self.parent as? EditorSplitViewController)?.console else {
+                return
+            }
             
             DispatchQueue.main.async {
-                if let url = self.document {
-                    let console = ConsoleViewController.visible
-                    guard console.view.window != nil else {
-                        let navVC = ThemableNavigationController(rootViewController: console)
-                        navVC.modalPresentationStyle = .overCurrentContext
-                        self.present(navVC, animated: true, completion: {
-                            self.runScript(debug: debug)
-                        })
-                        
+                if let url = self.document?.fileURL {
+                    func run() {
+                        console.textView.text = ""
+                        console.console = ""
+                        console.movableTextField?.placeholder = ""
+                        if Python.shared.isREPLRunning {
+                            if Python.shared.isScriptRunning(path) {
+                                return
+                            }
+                            
+                            Python.shared.run(script: Python.Script(path: path, debug: debug, breakpoints: self.breakpoints))
+                        } else {
+                            Python.shared.runScript(at: url)
+                        }
+                    }
+                    
+                    let editorSplitViewController = console.editorSplitViewController
+                    
+                    guard console.view.window != nil && editorSplitViewController?.ratio != 1 else {
+                        editorSplitViewController?.showConsole {
+                            run()
+                        }
                         return
                     }
                     
-                    console.textView.text = ""
-                    console.console = ""
-                    console.prompt = ""
-                    console.isAskingForInput = false
-                    if Python.shared.isREPLRunning {
-                        if Python.shared.isScriptRunning {
-                            return
-                        }
-                        // Import the script
-                        if !debug {
-                            PyInputHelper.userInput = "import console as c; s = c.run_script('\(url.path)')"
-                        } else {
-                            
-                            var breakpointsLines = [String]()
-                            
-                            for breakpoint in self.breakpoints {
-                                breakpointsLines.append(String(describing: breakpoint))
-                            }
-                            
-                            let breakpointsValue = "[\(breakpointsLines.joined(separator: ", "))]"
-                            
-                            PyInputHelper.userInput = "import console as c; s = c.run_script('\(url.path)', debug=True, breakpoints=\(breakpointsValue))"
-                        }
-                    } else {
-                        Python.shared.runScript(at: url)
-                    }
+                    run()
                 }
             }
         }
@@ -744,20 +1012,24 @@ fileprivate func parseArgs(_ args: inout [String]) {
         
         let text = textView.text
         
-        DispatchQueue.global().async {
-            do {
-                try text.write(to: self.document!, atomically: true, encoding: .utf8)
-                completion?(true)
-            } catch {
-                completion?(false)
-            }
+        guard document?.text != text else {
+            completion?(true)
+            return
+        }
+        
+        document?.text = text
+        
+        if document?.documentState != UIDocument.State.editingDisabled {
+            document?.save(to: document!.fileURL, for: .forOverwriting, completionHandler: completion)
         }
     }
     
     /// The View controller is closed and the document is saved.
     @objc func close() {
         
-        stop()
+        //stop()
+        
+        let presenting = presentingViewController
         
         dismiss(animated: true) {
             
@@ -765,68 +1037,82 @@ fileprivate func parseArgs(_ args: inout [String]) {
                 return
             }
             
-            self.save(completion: { (success) in
-                if !success {
-                    let alert = UIAlertController(title: Localizable.Errors.errorWrittingToScript, message: nil, preferredStyle: .alert)
-                    alert.addAction(UIAlertAction(title: Localizable.ok, style: .cancel, handler: nil))
-                    UIApplication.shared.keyWindow?.rootViewController?.present(alert, animated: true, completion: nil)
-                }
+            self.save(completion: { (_) in
                 DispatchQueue.main.async {
-                    DocumentBrowserViewController.visible?.collectionView.reloadData()
+                    self.document?.text = self.textView.text
+                    self.document?.close(completionHandler: { (success) in
+                        if !success {
+                            let alert = UIAlertController(title: Localizable.Errors.errorWrittingToScript, message: nil, preferredStyle: .alert)
+                            alert.addAction(UIAlertAction(title: Localizable.ok, style: .cancel, handler: nil))
+                            presenting?.present(alert, animated: true, completion: nil)
+                        }
+                    })
                 }
             })
         }
     }
     
-    /// The doc string to display.
-    @objc var docString: String? {
-        didSet {
-            
-            class DocViewController: UIViewController, UIAdaptivePresentationControllerDelegate {
-                
-                func adaptivePresentationStyle(for controller: UIPresentationController) -> UIModalPresentationStyle {
-                    return .none
-                }
-            }
-            
-            if presentedViewController != nil, presentedViewController! is DocViewController {
-                presentedViewController?.dismiss(animated: false) {
-                    self.docString = self.docString
-                }
-                return
-            }
-            
-            guard docString != nil else {
-                return
-            }
-            
-            DispatchQueue.main.async {
-                let docView = UITextView()
-                docView.textColor = .white
-                docView.font = UIFont(name: "Menlo", size: UIFont.systemFontSize)
-                docView.isEditable = false
-                docView.text = self.docString
-                
-                let docVC = DocViewController()
-                docVC.view = docView
-                docVC.view.backgroundColor = .black
-                docVC.preferredContentSize = CGSize(width: 300, height: 100)
-                docVC.modalPresentationStyle = .popover
-                docVC.presentationController?.delegate = docVC
-                docVC.popoverPresentationController?.backgroundColor = .black
-                docVC.popoverPresentationController?.permittedArrowDirections = [.up, .down]
-                
-                if let selectedTextRange = self.textView.contentTextView.selectedTextRange {
-                    docVC.popoverPresentationController?.sourceView = self.textView.contentTextView
-                    docVC.popoverPresentationController?.sourceRect = self.textView.contentTextView.caretRect(for: selectedTextRange.end)
-                } else {
-                    docVC.popoverPresentationController?.sourceView = self.textView.contentTextView
-                    docVC.popoverPresentationController?.sourceRect = self.textView.contentTextView.bounds
-                }
-                
-                self.present(docVC, animated: true, completion: nil)
-            }
+    /// Shows documentation
+    @objc func showDocs(_ sender: UIBarButtonItem) {
+        if documentationNavigationController == nil {
+            documentationNavigationController = ThemableNavigationController(rootViewController: DocumentationViewController())
         }
+        present(documentationNavigationController!, animated: true, completion: nil)
+    }
+    
+    /// Inserts two spaces.
+    @objc func insertTab() {
+        textView.contentTextView.insertText(EditorViewController.indentation)
+    }
+    
+    /// Comments / Uncomments line.
+    @objc func toggleComment() {
+        guard var line = textView.contentTextView.currentLine else {
+            return
+        }
+        
+        let currentLine = line
+        
+        line = line.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "\t", with: "")
+        
+        guard textView.contentTextView.isFirstResponder else {
+            return
+        }
+        
+        if line.hasPrefix("#") {
+            line = currentLine.replacingFirstOccurrence(of: "#", with: "")
+        } else {
+            line = "#"+currentLine
+        }
+        if let lineRange = textView.contentTextView.currentLineRange {
+            textView.contentTextView.replace(lineRange, withText: line)
+        }
+    }
+    
+    /// Undo.
+    @objc func undo() {
+        textView.contentTextView.undoManager?.undo()
+    }
+    
+    /// Redo.
+    @objc func redo() {
+        textView.contentTextView.undoManager?.redo()
+    }
+    
+    /// Shows runtime settings.
+    @objc func showRuntimeSettings(_ sender: UIBarButtonItem) {
+        
+        let alert = UIAlertController(title: Localizable.runtime, message: nil, preferredStyle: .actionSheet)
+        
+        alert.addAction(UIAlertAction(title: Localizable.ArgumentsAlert.title, style: .default, handler: setArgs))
+        
+        alert.addAction(UIAlertAction(title: Localizable.CurrentDirectoryAlert.title, style: .default, handler: setCwd))
+        
+        alert.addAction(UIAlertAction(title: Localizable.cancel, style: .cancel, handler: nil))
+        
+        alert.popoverPresentationController?.barButtonItem = sender
+        
+        present(alert, animated: true, completion: nil)
     }
     
     // MARK: - Breakpoints
@@ -844,15 +1130,17 @@ fileprivate func parseArgs(_ args: inout [String]) {
     /// The currently running line. Set to `0` when no breakpoint is running.
     @objc static var runningLine = 0 {
         didSet {
-            guard let editor = EditorSplitViewController.visible?.editor else {
-                return
-            }
-            for (position, marker) in editor.breakpointMarkers {
-                DispatchQueue.main.async {
-                    marker.backgroundColor = breakpointColor
-                    if position.line == runningLine {
-                        print("Running")
-                        marker.backgroundColor = runningLineColor
+            for console in ConsoleViewController.visibles {
+                guard let editor = console.editorSplitViewController?.editor else {
+                    return
+                }
+                for (position, marker) in editor.breakpointMarkers {
+                    DispatchQueue.main.async {
+                        marker.backgroundColor = breakpointColor
+                        if position.line == runningLine {
+                            print("Running")
+                            marker.backgroundColor = runningLineColor
+                        }
                     }
                 }
             }
@@ -961,17 +1249,17 @@ fileprivate func parseArgs(_ args: inout [String]) {
     // MARK: - Keyboard
     
     /// Resize `textView`.
-    @objc func keyboardWillShow(_ notification:Notification) {
+    @objc func keyboardDidShow(_ notification:Notification) {
         let d = notification.userInfo!
-        var r = d[UIResponder.keyboardFrameEndUserInfoKey] as! CGRect
+        let r = d[UIResponder.keyboardFrameEndUserInfoKey] as! CGRect
+        let point = (view.window)?.convert(r.origin, to: textView) ?? r.origin
         
-        r = textView.convert(r, from:nil)
-        textView.contentInset.bottom = r.height
-        textView.contentTextView.scrollIndicatorInsets.bottom = r.height
+        textView.contentInset.bottom = (point.y >= textView.frame.height ? 0 : textView.frame.height-point.y)
+        textView.contentTextView.verticalScrollIndicatorInsets.bottom = textView.contentInset.bottom
         
         if searchBar?.window != nil {
             textView.contentInset.top = findBarHeight
-            textView.contentTextView.scrollIndicatorInsets.top = findBarHeight
+            textView.contentTextView.verticalScrollIndicatorInsets.top = findBarHeight
         }
     }
     
@@ -982,11 +1270,49 @@ fileprivate func parseArgs(_ args: inout [String]) {
         
         if searchBar?.window != nil {
             textView.contentInset.top = findBarHeight
-            textView.contentTextView.scrollIndicatorInsets.top = findBarHeight
+            textView.contentTextView.verticalScrollIndicatorInsets.top = findBarHeight
         }
     }
     
     // MARK: - Text view delegate
+    
+    /// Taken from https://stackoverflow.com/a/52515645/7515957.
+    private func characterBeforeCursor() -> String? {
+        // get the cursor position
+        if let cursorRange = textView.contentTextView.selectedTextRange {
+            // get the position one character before the cursor start position
+            if let newPosition = textView.contentTextView.position(from: cursorRange.start, offset: -1) {
+                let range = textView.contentTextView.textRange(from: newPosition, to: cursorRange.start)
+                return textView.contentTextView.text(in: range!)
+            }
+        }
+        return nil
+    }
+    
+    /// Taken from https://stackoverflow.com/a/52515645/7515957.
+    private func characterAfterCursor() -> String? {
+        // get the cursor position
+        if let cursorRange = textView.contentTextView.selectedTextRange {
+            // get the position one character before the cursor start position
+            if let newPosition = textView.contentTextView.position(from: cursorRange.start, offset: 1) {
+                let range = textView.contentTextView.textRange(from: newPosition, to: cursorRange.start)
+                return textView.contentTextView.text(in: range!)
+            }
+        }
+        return nil
+    }
+    
+    func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
+        for console in ConsoleViewController.visibles {
+            if console.movableTextField?.textField.isFirstResponder == false {
+                continue
+            } else {
+                console.movableTextField?.textField.resignFirstResponder()
+                return false
+            }
+        }
+        return true
+    }
     
     func textViewDidChangeSelection(_ textView: UITextView) {
         if textView.isFirstResponder {
@@ -996,6 +1322,27 @@ fileprivate func parseArgs(_ args: inout [String]) {
     }
     
     func textViewDidChange(_ textView: UITextView) {
+        
+        func removeUndoAndRedo() {
+            for (i, item) in (UIMenuController.shared.menuItems ?? []).enumerated() {
+                if item.action == #selector(EditorViewController.redo) || item.action == #selector(EditorViewController.undo) {
+                    UIMenuController.shared.menuItems?.remove(at: i)
+                    removeUndoAndRedo()
+                    break
+                }
+            }
+        }
+        
+        removeUndoAndRedo()
+        
+        if textView.undoManager?.canRedo == true {
+            UIMenuController.shared.menuItems?.insert(UIMenuItem(title: Localizable.MenuItems.redo, action: #selector(EditorViewController.redo)), at: 0)
+        }
+        
+        if textView.undoManager?.canUndo == true {
+            UIMenuController.shared.menuItems?.insert(UIMenuItem(title: Localizable.MenuItems.undo, action: #selector(EditorViewController.undo)), at: 0)
+        }
+        
         return self.textView.textViewDidChange(textView)
     }
     
@@ -1004,12 +1351,114 @@ fileprivate func parseArgs(_ args: inout [String]) {
         
         docString = nil
         
-        if text == "\t", let textRange = range.toTextRange(textInput: textView) {
-            textView.replace(textRange, withText: EditorViewController.indentation)
+        if text == "\n", currentSuggestionIndex != -1 {
+            inputAssistantView(inputAssistant, didSelectSuggestionAtIndex: 0)
             return false
         }
         
-        if text == "\n", var currentLine = textView.currentLine {
+        if text == "\t" {
+            if let textRange = range.toTextRange(textInput: textView) {
+                textView.replace(textRange, withText: EditorViewController.indentation)
+                return false
+            }
+        }
+        
+        // Close parentheses and brackets.
+        if let start = textView.selectedTextRange?.start, let textRange = textView.textRange(from: start, to: textView.endOfDocument) {
+         
+            if text == "(" {
+                var parenthesesFound = false
+                var closeParentheses = false
+                for char in textView.text(in: textRange) ?? "" {
+                    if char == "(" {
+                        closeParentheses = true
+                        parenthesesFound = true
+                        break
+                    } else if char == ")" {
+                        parenthesesFound = true
+                        break
+                    }
+                }
+                
+                textView.insertText("(")
+                
+                let range = textView.selectedTextRange
+                
+                if !parenthesesFound || closeParentheses {
+                    textView.insertText(")")
+                }
+                
+                textView.selectedTextRange = range
+                
+                return false
+            }
+            
+            if text == "[" {
+                
+                var bracketsFound = false
+                var closeBrackets = false
+                for char in textView.text(in: textRange) ?? "" {
+                    if char == "[" {
+                        closeBrackets = true
+                        bracketsFound = true
+                        break
+                    } else if char == "]" {
+                        bracketsFound = true
+                        break
+                    }
+                }
+                
+                textView.insertText("[")
+                
+                let range = textView.selectedTextRange
+                
+                if !bracketsFound || closeBrackets {
+                    textView.insertText("]")
+                }
+                
+                textView.selectedTextRange = range
+                
+                return false
+            }
+            
+            if text == "{" {
+                
+                var curlyBracesFound = false
+                var closeCurlyBraces = false
+                for char in textView.text(in: textRange) ?? "" {
+                    if char == "{" {
+                        closeCurlyBraces = true
+                        curlyBracesFound = true
+                        break
+                    } else if char == "}" {
+                        curlyBracesFound = true
+                        break
+                    }
+                }
+                
+                textView.insertText("{")
+                
+                let range = textView.selectedTextRange
+                
+                if !curlyBracesFound || closeCurlyBraces {
+                    textView.insertText("}")
+                }
+                
+                textView.selectedTextRange = range
+                
+                return false
+            }
+        }
+        if (characterBeforeCursor() == "(" && text == ")" && characterAfterCursor() == ")") || (characterBeforeCursor() == "[" && text == "]" && characterAfterCursor() == "]") || (characterBeforeCursor() == "{" && text == "}" && characterAfterCursor() == "}") {
+            textView.selectedRange = NSRange(location: textView.selectedRange.location+1, length: textView.selectedRange.length)
+            return false
+        }
+        
+        if text == "\n", var currentLine = textView.currentLine, let currentLineRange = textView.currentLineRange, let selectedRange = textView.selectedTextRange {
+            
+            if selectedRange.start == currentLineRange.start {
+                return true
+            }
             
             var spaces = ""
             while currentLine.hasPrefix(" ") {
@@ -1028,11 +1477,54 @@ fileprivate func parseArgs(_ args: inout [String]) {
         return true
     }
     
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        textView.contentTextView.setNeedsDisplay()
+    }
+    
     // MARK: - Suggestions
     
-    /// Returns suggestions for current word.
-    @objc var suggestions = [String]() {
+    private var currentSuggestionIndex = -1 {
         didSet {
+            DispatchQueue.main.async {
+                self.inputAssistant.reloadData()
+            }
+        }
+    }
+    
+    /// Selects a suggestion from hardware tab key.
+    @objc func nextSuggestion() {
+        let new = currentSuggestionIndex+1
+        
+        if suggestions.indices.contains(new) {
+            currentSuggestionIndex = new
+        } else {
+            currentSuggestionIndex = -1
+        }
+    }
+    
+    /// Returns suggestions for current word.
+    @objc var suggestions: [String] {
+        
+        get {
+            
+            if _suggestions.indices.contains(currentSuggestionIndex) {
+                var completions = _suggestions
+                
+                let completion = completions[currentSuggestionIndex]
+                completions.remove(at: currentSuggestionIndex)
+                completions.insert(completion, at: 0)
+                return completions
+            }
+            
+            return _suggestions
+        }
+        
+        set {
+            
+            currentSuggestionIndex = -1
+            
+            _suggestions = newValue
+            
             guard !Thread.current.isMainThread else {
                 return
             }
@@ -1043,18 +1535,111 @@ fileprivate func parseArgs(_ args: inout [String]) {
         }
     }
     
+    private var _completions = [String]()
+    
+    private var _suggestions = [String]()
+    
     /// Completions corresponding to `suggestions`.
-    @objc var completions = [String]()
+    @objc var completions: [String] {
+        get {
+            if _completions.indices.contains(currentSuggestionIndex) {
+                var completions = _completions
+                
+                let completion = completions[currentSuggestionIndex]
+                completions.remove(at: currentSuggestionIndex)
+                completions.insert(completion, at: 0)
+                return completions
+            }
+            
+            return _completions
+        }
+        
+        set {
+            _completions = newValue
+        }
+    }
     
     /// Returns doc strings per suggestions.
     @objc var docStrings = [String:String]()
+    
+    /// The doc string to display.
+    @objc var docString: String? {
+        didSet {
+            
+            class DocViewController: UIViewController, UIAdaptivePresentationControllerDelegate {
+                
+                override func viewLayoutMarginsDidChange() {
+                    super.viewLayoutMarginsDidChange()
+                    
+                    view.subviews.first?.frame = view.safeAreaLayoutGuide.layoutFrame
+                }
+                
+                override func viewWillAppear(_ animated: Bool) {
+                    super.viewWillAppear(animated)
+                    
+                    view.subviews.first?.isHidden = true
+                }
+                
+                override func viewDidAppear(_ animated: Bool) {
+                    super.viewDidAppear(animated)
+                    
+                    view.subviews.first?.frame = view.safeAreaLayoutGuide.layoutFrame
+                    view.subviews.first?.isHidden = false
+                }
+                
+                func adaptivePresentationStyle(for controller: UIPresentationController) -> UIModalPresentationStyle {
+                    return .none
+                }
+            }
+            
+            if presentedViewController != nil, presentedViewController! is DocViewController {
+                presentedViewController?.dismiss(animated: false) {
+                    self.docString = self.docString
+                }
+                return
+            }
+            
+            guard docString != nil else {
+                return
+            }
+            
+            DispatchQueue.main.async {
+                let docView = UITextView()
+                docView.textColor = .white
+                docView.font = UIFont(name: "Menlo", size: UIFont.systemFontSize)
+                docView.isEditable = false
+                docView.text = self.docString
+                docView.backgroundColor = .black
+                
+                let docVC = DocViewController()
+                docView.frame = docVC.view.safeAreaLayoutGuide.layoutFrame
+                docVC.view.addSubview(docView)
+                docVC.view.backgroundColor = .black
+                docVC.preferredContentSize = CGSize(width: 300, height: 100)
+                docVC.modalPresentationStyle = .popover
+                docVC.presentationController?.delegate = docVC
+                docVC.popoverPresentationController?.backgroundColor = .black
+                docVC.popoverPresentationController?.permittedArrowDirections = [.up, .down]
+                
+                if let selectedTextRange = self.textView.contentTextView.selectedTextRange {
+                    docVC.popoverPresentationController?.sourceView = self.textView.contentTextView
+                    docVC.popoverPresentationController?.sourceRect = self.textView.contentTextView.caretRect(for: selectedTextRange.end)
+                } else {
+                    docVC.popoverPresentationController?.sourceView = self.textView.contentTextView
+                    docVC.popoverPresentationController?.sourceRect = self.textView.contentTextView.bounds
+                }
+                
+                self.present(docVC, animated: true, completion: nil)
+            }
+        }
+    }
     
     /// Updates suggestions.
     func updateSuggestions() {
         
         let textView = self.textView.contentTextView
         
-        guard !Python.shared.isScriptRunning, let range = textView.selectedTextRange, let textRange = textView.textRange(from: textView.beginningOfDocument, to: range.end), let text = textView.text(in: textRange) else {
+        guard let range = textView.selectedTextRange, let textRange = textView.textRange(from: textView.beginningOfDocument, to: range.end), let text = textView.text(in: textRange) else {
             self.suggestions = []
             self.completions = []
             return inputAssistant.reloadData()
@@ -1064,22 +1649,30 @@ fileprivate func parseArgs(_ args: inout [String]) {
         let input = [
             "from _codecompletion import suggestForCode",
             "source = '''",
-            text.replacingOccurrences(of: "'", with: "\\'"),
+            text.replacingOccurrences(of: "'", with: "\\'").replacingOccurrences(of: "\\", with: "\\\\"),
             "'''",
-            "suggestForCode(source, '\(document?.path ?? "")')"
+            "suggestForCode(source, '\((document?.fileURL.path ?? "").replacingOccurrences(of: "'", with: "\\'"))')"
         ].joined(separator: ";")
-        PyInputHelper.userInput = input
+        Python.shared.run(code: input)
     }
     
     // MARK: - Syntax text view delegate
 
     func didChangeText(_ syntaxTextView: SyntaxTextView) {
-        if !isSaving {
-            isSaving = true
-            DispatchQueue.main.asyncAfter(deadline: .now()+1) {
-                self.save { (_) in
-                    self.isSaving = false
+        if #available(iOS 13.0, *) {
+            for scene in UIApplication.shared.connectedScenes {
+                
+                guard scene != view.window?.windowScene else {
+                    continue
                 }
+                
+                let editor = (((scene.delegate as? UIWindowSceneDelegate)?.window??.rootViewController?.presentedViewController as? UINavigationController)?.viewControllers.first as? EditorSplitViewController)?.editor
+                
+                guard editor?.textView.text != syntaxTextView.text, editor?.document?.fileURL.path == document?.fileURL.path else {
+                    continue
+                }
+                
+                editor?.textView.text = syntaxTextView.text
             }
         }
     }
@@ -1095,15 +1688,33 @@ fileprivate func parseArgs(_ args: inout [String]) {
     func inputAssistantView(_ inputAssistantView: InputAssistantView, didSelectSuggestionAtIndex index: Int) {
         
         guard completions.indices.contains(index), suggestions.indices.contains(index), docStrings.keys.contains(suggestions[index]) else {
+            currentSuggestionIndex = -1
             return
         }
         
-        if let currentWord = textView.contentTextView.currentWord, !suggestions[index].hasPrefix(currentWord), !suggestions[index].contains("_"), let currentWordRange = textView.contentTextView.currentWordRange {
-            textView.contentTextView.replace(currentWordRange, withText: suggestions[index])
-        } else if completions[index] != "" {
-            textView.insertText(completions[index])
-            docString = docStrings[suggestions[index]]
+        let completion = completions[index]
+        let suggestion = suggestions[index]
+        
+        let selectedRange = textView.contentTextView.selectedRange
+        
+        let location = selectedRange.location-(suggestion.count-completion.count)
+        let length = suggestion.count-completion.count
+        
+        /*
+         
+         hello_w HELLO_WORLD ORLD
+         
+         */
+        
+        let iDonTKnowHowToNameThisVariableButItSSomethingWithTheSelectedRangeButFromTheBeginingLikeTheEntireSelectedWordWithUnderscoresIncluded = NSRange(location: location, length: length)
+        
+        textView.contentTextView.selectedRange = iDonTKnowHowToNameThisVariableButItSSomethingWithTheSelectedRangeButFromTheBeginingLikeTheEntireSelectedWordWithUnderscoresIncluded
+        
+        DispatchQueue.main.asyncAfter(deadline: .now()+0.1) {
+            self.textView.contentTextView.insertText(suggestion)
         }
+        
+        currentSuggestionIndex = -1
     }
     
     // MARK: - Input assistant view data source
@@ -1147,11 +1758,24 @@ fileprivate func parseArgs(_ args: inout [String]) {
     
     func inputAssistantView(_ inputAssistantView: InputAssistantView, nameForSuggestionAtIndex index: Int) -> String {
         
-        if suggestions[index].hasSuffix("(") {
-            return suggestions[index]+")"
+        let suffix: String = ((currentSuggestionIndex != -1 && index == 0) ? " ⤶" : "")
+        
+        guard suggestions.indices.contains(index) else {
+            return ""
         }
         
-        return suggestions[index]
+        if suggestions[index].hasSuffix("(") {
+            return suggestions[index]+")"+suffix
+        }
+        
+        return suggestions[index]+suffix
+    }
+    
+    // MARK: - Document picker delegate
+    
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        _ = urls.first?.startAccessingSecurityScopedResource()
+        currentDirectory = urls.first ?? currentDirectory
     }
 }
 

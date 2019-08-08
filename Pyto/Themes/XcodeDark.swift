@@ -17,15 +17,15 @@ struct XcodeDarkSourceCodeTheme: SourceCodeTheme {
     let defaultTheme = DefaultSourceCodeTheme()
     
     var lineNumbersStyle: LineNumbersStyle? {
-        return nil
+        return defaultTheme.lineNumbersStyle
     }
     
     var gutterStyle: GutterStyle {
-        return GutterStyle(backgroundColor: .clear, minimumWidth: 0)
+        return GutterStyle(backgroundColor: backgroundColor, minimumWidth: defaultTheme.gutterStyle.minimumWidth)
     }
     
     var font: Font {
-        return defaultTheme.font
+        return defaultTheme.font.withSize(CGFloat(ThemeFontSize))
     }
     
     let backgroundColor = Color(displayP3Red: 31/255, green: 31/255, blue: 36/255, alpha: 1)
@@ -62,8 +62,6 @@ struct XcodeDarkSourceCodeTheme: SourceCodeTheme {
 
 // MARK: - Theme
 
-#if os(iOS)
-
 /// The Xcode dark theme.
 struct XcodeDarkTheme: Theme {
     
@@ -71,7 +69,9 @@ struct XcodeDarkTheme: Theme {
     
     let barStyle: UIBarStyle = .black
     
+    var userInterfaceStyle: UIUserInterfaceStyle {
+        return .dark
+    }
+    
     let sourceCodeTheme: SourceCodeTheme = XcodeDarkSourceCodeTheme()
 }
-
-#endif

@@ -17,15 +17,15 @@ struct SolarizedDarkSourceCodeTheme: SourceCodeTheme {
     let defaultTheme = DefaultSourceCodeTheme()
     
     var lineNumbersStyle: LineNumbersStyle? {
-        return nil
+        return defaultTheme.lineNumbersStyle
     }
     
     var gutterStyle: GutterStyle {
-        return GutterStyle(backgroundColor: .clear, minimumWidth: 0)
+        return GutterStyle(backgroundColor: backgroundColor, minimumWidth: defaultTheme.gutterStyle.minimumWidth)
     }
     
     var font: Font {
-        return defaultTheme.font
+        return defaultTheme.font.withSize(CGFloat(ThemeFontSize))
     }
     
     let backgroundColor = Color(displayP3Red: 0/255, green: 43/255, blue: 54/255, alpha: 1)
@@ -62,8 +62,6 @@ struct SolarizedDarkSourceCodeTheme: SourceCodeTheme {
 
 // MARK: - Theme
 
-#if os(iOS)
-
 /// The Cool Glow theme.
 struct SolarizedDarkTheme: Theme {
     
@@ -71,7 +69,9 @@ struct SolarizedDarkTheme: Theme {
     
     let barStyle: UIBarStyle = .black
     
+    var userInterfaceStyle: UIUserInterfaceStyle {
+        return .dark
+    }
+    
     let sourceCodeTheme: SourceCodeTheme = SolarizedDarkSourceCodeTheme()
 }
-
-#endif

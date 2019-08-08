@@ -4,24 +4,29 @@
 
 group: travis_latest
 os: osx
-osx_image: xcode10.1
+osx_image: xcode11
 language: objective-c
 xcode_project: Pyto.xcodeproj
 xcode_workspace: Pyto.xcworkspace
 # xcode_scheme: MyNewProjectTests
-xcode_destination: platform=iOS Simulator,OS=10.1,name=iPad Pro (9.7-inch)
+xcode_destination: platform=iOS Simulator,OS=13.0,name=iPad Pro (9.7-inch)
 # xcode_sdk: iphonesimulatorX.Y
 
 before_install:
+  - sw_vers
   # - brew upgrade python swiftlint
-  - pip install --upgrade pip
+  - python3 --version ; pip3 --version
+  - pip3 install --upgrade pip
 install:
-  # - pip install -r requirements.txt
-  - pip install flake8
+  # - pip3 install -r requirements.txt
+  - pip3 install flake8
 
 before_script:
-  - EXCLUDE=./.*,./Pyto*,./site-packages
+  - EXCLUDE=./.*,./Pyto_Mac/mac-site-packages,./Pyto_Mac/pip,./Pyto_Mac/PyObjC,./site-packages
+  - flake8 . --count --exclude=${EXCLUDE} --select=E9,F63,F7,F82 --show-source --statistics
+  - EXCLUDE=./.*,./Pyto*,./*site-packages
   - flake8 . --count --exclude=${EXCLUDE} --max-complexity=10 --max-line-length=127 --show-source --statistics
+  - flake8 --count --ignore=E402 "Lib/pyto_ui.py"
   #- swiftlint  # Done linting! Found 2225 violations, 91 serious in 82 files.
 script:
   - ./setup.sh

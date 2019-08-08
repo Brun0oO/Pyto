@@ -27,18 +27,10 @@ struct ReadonlyTheme: SourceCodeTheme {
     }
     let gutterStyle = GutterStyle(backgroundColor: .clear, minimumWidth: 0)
     var font: Font {
-        return defaultTheme.font
+        return defaultTheme.font.withSize(CGFloat(ThemeFontSize))
     }
     var backgroundColor: Color {
-        #if os(macOS)
-        if defaultTheme.backgroundColor != .white {
-            return defaultTheme.backgroundColor
-        } else {
-            return NSColor(deviceWhite: 0.9, alpha: 1)
-        }
-        #else
         return defaultTheme.backgroundColor
-        #endif
     }
     func color(for syntaxColorType: SourceCodeTokenType) -> Color {
         return defaultTheme.color(for: syntaxColorType)

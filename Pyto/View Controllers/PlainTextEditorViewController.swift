@@ -12,7 +12,7 @@ import SavannaKit
 import SourceEditor
 
 /// A View controller for editing plain text.
-class PlainTextEditorViewController: UIViewController, UITextViewDelegate {
+@available(*, deprecated, message: "Pyto only edits Python script.") class PlainTextEditorViewController: UIViewController, UITextViewDelegate {
     
     /// The Text view containing text.
     let textView = SyntaxTextView()
@@ -21,7 +21,7 @@ class PlainTextEditorViewController: UIViewController, UITextViewDelegate {
     var url: URL? {
         didSet {
             if let url = self.url {
-                title = url.deletingPathExtension().lastPathComponent
+                title = url.lastPathComponent
                 parent?.title = title
                 textView.text = (try? String(contentsOf: url)) ?? ""
                 
@@ -43,9 +43,6 @@ class PlainTextEditorViewController: UIViewController, UITextViewDelegate {
             do {
                 if let url = self.url, !self.isBundled {
                     try self.textView.text.write(to: url, atomically: true, encoding: .utf8)
-                }
-                DispatchQueue.main.async {
-                    DocumentBrowserViewController.visible?.collectionView.reloadData()
                 }
             } catch {
                 let alert = UIAlertController(title: Localizable.Errors.errorWrittingToScript, message: error.localizedDescription, preferredStyle: .alert)
@@ -73,7 +70,7 @@ class PlainTextEditorViewController: UIViewController, UITextViewDelegate {
     }
     
     /// Called when the user choosed a theme.
-    @objc func themeDidChanged(_ notification: Notification) {
+    @objc func themeDidChange(_ notification: Notification?) {
         setup(theme: ConsoleViewController.choosenTheme)
     }
     
@@ -85,12 +82,12 @@ class PlainTextEditorViewController: UIViewController, UITextViewDelegate {
     override func viewDidLoad() {
         super.viewDidLoad()
         
-        NotificationCenter.default.addObserver(self, selector: #selector(themeDidChanged(_:)), name: ThemeDidChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(themeDidChange(_:)), name: ThemeDidChangeNotification, object: nil)
         
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillShow), name: UIResponder.keyboardWillShowNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide), name: UIResponder.keyboardWillHideNotification, object: nil)
         
-        parent?.navigationItem.leftBarButtonItem = UIBarButtonItem(image: UIImage(named: "Grid"), style: .plain, target: self, action: #selector(close))
+        ((parent is UINavigationController) ? self : parent)?.navigationItem.leftBarButtonItem = UIBarButtonItem(image: EditorSplitViewController.gridImage, style: .plain, target: self, action: #selector(close))
         
         inputAssistant.trailingActions = [InputAssistantAction(image: EditorSplitViewController.downArrow, target: textView.contentTextView, action: #selector(textView.contentTextView.resignFirstResponder))]
         inputAssistant.attach(to: textView.contentTextView)
@@ -104,6 +101,12 @@ class PlainTextEditorViewController: UIViewController, UITextViewDelegate {
         }
         
         setup(theme: ConsoleViewController.choosenTheme)
+    }
+    
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        
+        themeDidChange(nil)
     }
     
     override func viewWillAppear(_ animated: Bool) {
@@ -150,7 +153,19 @@ class PlainTextEditorViewController: UIViewController, UITextViewDelegate {
         textView.frame = view.safeAreaLayoutGuide.layoutFrame
     }
     
-    // MARK: - Syntax text view delegate
+    // MARK: - Text view delegate
+    
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        textView.contentTextView.setNeedsDisplay()
+    }
+    
+    func textViewDidChangeSelection(_ textView: UITextView) {
+        return self.textView.textViewDidChangeSelection(textView)
+    }
+    
+    func textViewDidChange(_ textView: UITextView) {
+        return self.textView.textViewDidChange(textView)
+    }
     
     func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
         

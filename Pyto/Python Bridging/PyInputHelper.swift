@@ -8,21 +8,58 @@
 
 import Foundation
 
-/// A helperaccessible by Rubicon to request user's input.
+/// A helper accessible by Rubicon to request user's input.
 @objc class PyInputHelper: NSObject {
     
     /// The user's input. Set its value while Python script is waiting for input to pass the input.
     @objc static var userInput: String?
     
-    /// Shows an alert to request input.
+    /// Requests for input.
     ///
     /// - Parameters:
-    ///     - prompt: The title of the alert.
-    @objc static func showAlert(prompt: String?) {
+    ///     - prompt: The prompt sent by Python function.
+    ///     - script: The script that asked for input. Set to `nil` to request input on every console.
+    @objc static func showAlert(prompt: String?, script: String?) {
         let prompt_ = prompt
         DispatchQueue.main.sync {
-            #if !WIDGET
-            ConsoleViewController.visible.input(prompt: prompt_ ?? "")
+            #if !WIDGET && !MAIN
+            ConsoleViewController.visibles.first?.input(prompt: prompt_ ?? "")
+            #elseif !WIDGET
+            for console in ConsoleViewController.visibles {
+                
+                if script != nil {
+                    guard console.editorSplitViewController?.editor.document?.fileURL.path == script else {
+                        continue
+                    }
+                }
+                
+                console.input(prompt: prompt_ ?? "")
+            }
+            #endif
+        }
+    }
+    
+    /// Requests for a password.
+    ///
+    /// - Parameters:
+    ///     - prompt: The prompt sent by Python function.
+    ///     - script: The script that asked for input. Set to `nil` to request input on every console.
+    @objc static func getPass(prompt: String?, script: String?) {
+        let prompt_ = prompt
+        DispatchQueue.main.sync {
+            #if !WIDGET && !MAIN
+            ConsoleViewController.visibles.first?.getpass(prompt: prompt_ ?? "")
+            #elseif !WIDGET
+            for console in ConsoleViewController.visibles {
+                
+                if script != nil {
+                    guard console.editorSplitViewController?.editor.document?.fileURL.path == script else {
+                        continue
+                    }
+                }
+                
+                console.getpass(prompt: prompt_ ?? "")
+            }
             #endif
         }
     }

@@ -17,15 +17,15 @@ struct CoolGlowSourceCodeTheme: SourceCodeTheme {
     let defaultTheme = DefaultSourceCodeTheme()
     
     var lineNumbersStyle: LineNumbersStyle? {
-        return nil
+        return defaultTheme.lineNumbersStyle
     }
     
     var gutterStyle: GutterStyle {
-        return GutterStyle(backgroundColor: .clear, minimumWidth: 0)
+        return GutterStyle(backgroundColor: backgroundColor, minimumWidth: defaultTheme.gutterStyle.minimumWidth)
     }
     
     var font: Font {
-        return defaultTheme.font
+        return defaultTheme.font.withSize(CGFloat(ThemeFontSize))
     }
     
     let backgroundColor = Color(displayP3Red: 6/255, green: 7/255, blue: 29/255, alpha: 1)
@@ -62,8 +62,6 @@ struct CoolGlowSourceCodeTheme: SourceCodeTheme {
 
 // MARK: - Theme
 
-#if os(iOS)
-
 /// The Cool Glow theme.
 struct CoolGlowTheme: Theme {
     
@@ -73,9 +71,11 @@ struct CoolGlowTheme: Theme {
     
     let sourceCodeTheme: SourceCodeTheme = CoolGlowSourceCodeTheme()
     
+    var userInterfaceStyle: UIUserInterfaceStyle {
+        return .dark
+    }
+    
     var tintColor: UIColor? {
         return Color(displayP3Red: 175/255, green: 127/255, blue: 196/255, alpha: 1)
     }
 }
-
-#endif

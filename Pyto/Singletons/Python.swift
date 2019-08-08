@@ -8,22 +8,19 @@
 //
 
 import Foundation
-#if MAIN && os(iOS)
-import ios_system
+#if MAIN
 #elseif os(iOS) && !WIDGET
 @_silgen_name("PyRun_SimpleStringFlags")
 func PyRun_SimpleStringFlags(_: UnsafePointer<Int8>!, _: UnsafeMutablePointer<Any>!)
 
 @_silgen_name("Py_DecodeLocale")
 func Py_DecodeLocale(_: UnsafePointer<Int8>!, _: UnsafeMutablePointer<Int>!) -> UnsafeMutablePointer<wchar_t>
-#elseif os(macOS)
-import Cocoa
 #endif
 
 /// A class for interacting with `Cpython`
 @objc public class Python: NSObject {
     
-    #if !MAIN && os(iOS)
+    #if !MAIN
     /// Throws a fatal error.
     ///
     /// - Parameters:
@@ -38,13 +35,16 @@ import Cocoa
     
     private override init() {}
     
-    #if os(iOS)
     /// The bundle containing all Python resources.
     @objc var bundle: Bundle {
         if Bundle.main.bundleIdentifier?.hasSuffix(".ada.Pyto") == true || Bundle.main.bundleIdentifier?.hasSuffix(".ada.Pyto.Pyto-Widget") == true {
             return Bundle(identifier: "ch.ada.Python")!
+        } else if let bundle = Bundle(path: Bundle.main.path(forResource: "Python.framework", ofType: nil) ?? "") {
+            return bundle
+        } else if let bundle = Bundle(path: ((Bundle.main.privateFrameworksPath ?? "") as NSString).appendingPathComponent("Python.framework")) {
+            return bundle
         } else {
-            return Bundle(path: Bundle.main.path(forResource: "Python.framework", ofType: nil)!)!
+            return Bundle(for: Python.self)
         }
     }
     
@@ -60,7 +60,8 @@ import Cocoa
     /// Set to `true` while the REPL is asking for input.
     @objc public var isREPLAskingForInput = false
     
-    #endif
+    /// The thread running current thread.
+    @objc var currentRunningThreadID = -1
     
     /// All the Python output.
     public var output = ""
@@ -73,27 +74,128 @@ import Cocoa
     
     /// The arguments to pass to scripts.
     @objc public var args = [String]()
+
+    /// A class representing a script to run.
+    @objc public class Script: NSObject {
+        
+        /// The path of the script.
+        @objc public var path: String
+        
+        /// Set to `true` if the script should  be debugged with `pdb`.
+        @objc public var debug: Bool
+        
+        @objc public var breakpoints: [Int]
+        
+        /// Initializes the script.
+        ///
+        /// - Parameters:
+        ///     - path: The path of the script.
+        ///     - debug: Set to `true` if the script should  be debugged with `pdb`.
+        ///     - breakpoints: Line numbers where breakpoints should be placed if the script should be debugged.
+        @objc public init(path: String, debug: Bool, breakpoints: [Int] = []) {
+            self.path = path
+            self.debug = debug
+            self.breakpoints = breakpoints
+        }
+    }
     
-    #if os(iOS)
-    /// Runs given command with `ios_system`.
+    /// Python code to run.
+    @objc public var codeToRun: String?
+    
+    /// Runs given code..
     ///
     /// - Parameters:
-    ///     - cmd: Command to run.
-    ///
-    /// - Returns: The result code.
-    @objc func system(_ cmd: String) -> Int32 {
-        #if MAIN
-        ios_switchSession(IO.shared.ios_stdout)
-        ios_setDirectoryURL(FileManager.default.urls(for: .documentDirectory, in: .allDomainsMask)[0])
-        ios_setStreams(IO.shared.ios_stdin, IO.shared.ios_stdout, IO.shared.ios_stderr)
-        let retValue = ios_system(cmd.cValue)
-        sleep(1)
-        return retValue
-        #else
-        PyOutputHelper.print("Only supported on main app.")
-        return 1
-        #endif
+    ///     - code: Python code to run.
+    @objc public func run(code: String) {
+        codeToRun = code
     }
+    
+    /// The path of the script to run. Set it to run it.
+    @objc public var scriptToRun: Script?
+    
+    @objc private func removeScriptFromList(_ script: String) {
+        while let i = runningScripts.firstIndex(of: script) {
+            runningScripts.remove(at: i)
+        }
+    }
+    
+    @objc private func addScriptToList(_ script: String) {
+        if runningScripts.firstIndex(of: script) == nil {
+            runningScripts.append(script)
+        }
+    }
+    
+    /// The path of the scripts running.
+    @objc public var runningScripts = [String]() {
+        didSet {
+            DispatchQueue.main.async {
+                #if MAIN
+                
+                #if WIDGET
+                let visibles = [ConsoleViewController.visible ?? ConsoleViewController()]
+                #else
+                let visibles = ConsoleViewController.visibles
+                #endif
+                
+                for contentVC in visibles {
+                    guard let editor = contentVC.editorSplitViewController?.editor, let scriptPath = editor.document?.fileURL.path else {
+                        return
+                    }
+                    
+                    guard !(contentVC.editorSplitViewController is REPLViewController) && !(contentVC.editorSplitViewController is RunModuleViewController) && !(contentVC.editorSplitViewController is PipInstallerViewController) else {
+                        return
+                    }
+                    
+                    let item = editor.parent?.navigationItem
+                    
+                    if item?.rightBarButtonItem != contentVC.editorSplitViewController?.closeConsoleBarButtonItem {
+                        if self.runningScripts.contains(scriptPath) {
+                            item?.rightBarButtonItem = editor.stopBarButtonItem
+                        } else {
+                            item?.rightBarButtonItem = editor.runBarButtonItem
+                        }
+                    }
+                }
+                #endif
+            }
+        }
+    }
+    
+    /// Add a script here to send `KeyboardInterrupt`to it.
+    @objc public var scriptsToInterrupt = [String]()
+    
+    /// Add a script here to send `SystemExit`to it.
+    @objc public var scriptsToExit = [String]()
+    
+    private var _cwd = FileManager.default.urls(for: .documentDirectory, in: .allDomainsMask)[0].path
+    
+    /// The directory from which the script is executed.
+    @objc public var currentWorkingDirectory: String {
+        get {
+            var cwd = ""
+            let semaphore = DispatchSemaphore(value: 0)
+            queue.async {
+                cwd = self._cwd
+                semaphore.signal()
+            }
+                semaphore.wait()
+            return cwd
+        }
+        
+        set {
+            queue.async {
+                self._cwd = newValue
+            }
+        }
+    }
+    
+    /// Returns the environment.
+    @objc var environment: [String:String] {
+        return ProcessInfo.processInfo.environment
+    }
+    
+    /// Set to `true` when the REPL is ready to run scripts.
+    @objc var isSetup = false
     
     /// Exposes Pyto modules to Pyhon.
     @available(*, deprecated, message: "The Library is now located on app bundle.")
@@ -109,7 +211,15 @@ import Cocoa
     /// The thread running script.
     @objc public var thread: Thread?
     
-    /// Run script at given URL.
+    /// Runs the given script.
+    ///
+    /// - Parameters:
+    ///     - script: Script to run.
+    public func run(script: Script) {
+        scriptToRun = script
+    }
+    
+    /// Run script at given URL. Will be ran with Python C API directly. Call it once!
     ///
     /// - Parameters:
     ///     - url: URL of the Python script to run.
@@ -119,20 +229,18 @@ import Cocoa
             self.thread = Thread.current
             
             guard !self.isREPLRunning else {
-                PyOutputHelper.print(Localizable.Python.alreadyRunning) // Should not be called. When the REPL is running, run the script inside it.
+                PyOutputHelper.print(Localizable.Python.alreadyRunning, script: nil) // Should not be called. When the REPL is running, run the script inside it.
                 return
             }
             
-            if url.path == Bundle.main.url(forResource: "REPL", withExtension: "py")?.path {
-                self.isREPLRunning = true
-            }
+            self.isREPLRunning = true
             
             #if WIDGET
-            self.isScriptRunning = true
+            self.runningScripts.append(url.path)
             PyRun_SimpleFileExFlags(fopen(url.path.cValue, "r"), url.lastPathComponent.cValue, 0, nil)
             #else
             guard let startupURL = Bundle(for: Python.self).url(forResource: "Startup", withExtension: "py"), let src = try? String(contentsOf: startupURL) else {
-                PyOutputHelper.print(Localizable.Python.alreadyRunning)
+                PyOutputHelper.print(Localizable.Python.alreadyRunning, script: nil)
                 return
             }
             
@@ -141,175 +249,35 @@ import Cocoa
             #endif
         }
     }
-    #endif
-    
-    #if os(macOS)
-    
-    /// Pipe used for standard input.
-    var inputPipe = Pipe()
-    
-    /// Pipe used for standard output.
-    var outputPipe = Pipe()
-    
-    /// The process running Python.
-    var process: Process?
-    
-    /// Run script at given URL in a subprocess.
+
+    /// Sends `SystemExit`.
     ///
     /// - Parameters:
-    ///     - url: URL of the Python script to run.
-    @objc public func runScript(at url: URL) {
-        
-        guard let startupURL = Bundle(for: Python.self).url(forResource: "Startup", withExtension: "py"), let src = try? String(contentsOf: startupURL) else {
-            return
-        }
-        
-        guard let code = String(format: src, url.path).data(using: .utf8) else {
-            return
-        }
-        
-        guard let pythonExecutble = Bundle.main.url(forResource: "python3", withExtension: nil) else {
-            return
-        }
-        
-        let tmpFile = NSTemporaryDirectory()+"/script.py"
-        
-        if FileManager.default.fileExists(atPath: tmpFile) {
-            try? FileManager.default.removeItem(atPath: tmpFile)
-        }
-        
-        FileManager.default.createFile(atPath: tmpFile, contents: code, attributes: [:])
-        
-        if process?.isRunning == true {
-            process?.terminate()
-            process?.standardOutput = nil
-            process?.standardError = nil
-            process?.standardInput = nil
-        }
-        
-        let pythonPath = [
-            Bundle.main.path(forResource: "site-packages", ofType: nil) ?? "",
-            Bundle.main.path(forResource: "python3.7", ofType: nil) ?? "",
-            Bundle.main.path(forResource: "lib/python3.7/site-packages", ofType: nil) ?? "",
-            Bundle.main.path(forResource: "PyObjc", ofType: nil) ?? "",
-            Bundle.main.resourcePath ?? "",
-            url.deletingLastPathComponent().path,
-            sitePackagesDirectory ?? "",
-            "/usr/local/lib/python3.7/site-packages"
-            ].joined(separator: ":")
-        
-        inputPipe = Pipe()
-        outputPipe = Pipe()
-        
-        func read(handle: FileHandle) {
-            guard let str = String(data: handle.availableData, encoding: .utf8), !str.isEmpty else {
-                return
-            }
-            
-            DispatchQueue.main.async {
-                for window in NSApp.windows {
-                    if let editor = window.contentViewController as? EditorViewController, !(editor is REPLViewController) {
-                        
-                        if str.hasPrefix("Pyto.error_at_line;"), (editor.document?.fileURL == url || editor.temporaryFileURL == url) {
-                            let components = str.components(separatedBy: ";")
-                            guard components.indices.contains(1), let lineNum = Int(components[1]) else {
-                                continue
-                            }
-                            editor.showErrorAtLine(lineNum)
-                        } else if str != "Pyto.console.clear" && str != "Pyto.console.clear\n" {
-                            editor.consoleTextView?.string += str
-                            editor.console += str
-                            editor.consoleTextView?.scrollToBottom()
-                        } else {
-                            editor.consoleTextView?.string = ""
-                            editor.console = ""
-                        }
-                    }
-                }
-            }
-        }
-        
-        outputPipe.fileHandleForReading.readabilityHandler = read
-        
-        process = Process()
-        process?.executableURL = pythonExecutble
-        process?.arguments = ["-u", tmpFile]
-        
-        var environment               = ProcessInfo.processInfo.environment
-        environment["TMP"]            = NSTemporaryDirectory()
-        environment["PYTHONHOME"]     = Bundle.main.resourcePath ?? ""
-        environment["PYTHONPATH"]     = pythonPath
-        environment["MPLBACKEND"]     = "TkAgg"
-        environment["NSUnbufferedIO"] = "YES"
-        environment["PIP_TARGET"]     = sitePackagesDirectory
-        process?.environment          = environment
-        
-        process?.terminationHandler = { _ in
-            self.isScriptRunning = false
-        }
-        process?.standardOutput = outputPipe
-        process?.standardError = outputPipe
-        process?.standardInput = inputPipe
-        isScriptRunning = true
-        
-        EditorViewController.clear()
-        
-        do {
-            try process?.run()
-        } catch {
-            NSApp.presentError(error)
+    ///     - script: The path of the script to stop.
+    @objc public func stop(script: String) {
+        if scriptsToExit.firstIndex(of: script) == nil {
+            scriptsToExit.append(script)
         }
     }
-    #endif
     
-    #if os(iOS)
-    
-    /// Set to `false` to send `SystemExit`.
-    @objc private var _isScriptRunning = false
-    
-    /// Set to `true` to send `KeyboardInterrupt`.
-    @objc private var _interrupt = false
-    
-    /// Sends `SystemExit`.
-    @objc public func stop() {
-        _isScriptRunning = false
-    }
-    
-    @objc public func interrupt() {
-        _interrupt = true
-    }
-    
-    #endif
-    
-    /// Set to `true` while a script is running to prevent user from running one while another is running.
-    @objc public var isScriptRunning = false {
-        didSet {
-            #if os(iOS)
-            DispatchQueue.main.async {
-                #if MAIN
-                let contentVC = ConsoleViewController.visible
-                
-                guard let editor = (contentVC.parent as? EditorSplitViewController)?.editor ?? EditorSplitViewController.visible?.editor else {
-                    return
-                }
-                
-                let item = editor.parent?.navigationItem
-                
-                if self.isScriptRunning {
-                    item?.rightBarButtonItem = editor.stopBarButtonItem
-                } else {
-                    item?.rightBarButtonItem = editor.runBarButtonItem
-                }
-                item?.rightBarButtonItem?.isEnabled = (self.isScriptRunning == self.isScriptRunning)
-                #endif                
-            }
-            #elseif os(macOS)
-            if !isScriptRunning && process?.isRunning == true {
-                process?.terminate()
-            }
-            
-            EditorViewController.toggleStopButton()
-            #endif
+    /// Sends `KeyboardInterrupt`.
+    ///
+    /// - Parameters:
+    ///     - script: The path of the script to interrupt.
+    @objc public func interrupt(script: String) {
+        if scriptsToInterrupt.firstIndex(of: script) == nil {
+            scriptsToInterrupt.append(script)
         }
+    }
+
+    /// Checks if a script is currently running.
+    ///
+    /// - Parameters:
+    ///     - script: Script to check.
+    ///
+    /// - Returns: `true` if the passed script is currently running.
+    @objc public func isScriptRunning(_ script: String) -> Bool {
+        return runningScripts.contains(script)
     }
 }
+

@@ -6,13 +6,29 @@
 //  Copyright © 2018 Adrian Labbé. All rights reserved.
 //
 
-import Foundation
+import UIKit
+
+/// Returns a localized string from UIKit with given key.
+///
+/// - Parameters:
+///     - key: The key of the String.
+///
+/// - Returns: The localized string from UIKit corresponding to the given key.
+func UIKitLocalizedString(key: String) -> String {
+    return Bundle(for: UIApplication.self).localizedString(forKey: key, value: nil, table: nil)
+}
 
 /// A class with an unaccessible initializer.
 class Static { private init(){} }
 
 /// A class containing localizable strings.
 class Localizable: Static {
+    
+    /* Title for command for selecting next suggestion */
+    static let nextSuggestion = NSLocalizedString("nextSuggestion", comment: "Title for command for selecting next suggestion")
+    
+    /// Install
+    static let install = NSLocalizedString("install", comment: "Install")
     
     /// Button to add script to Siri.
     static let addToSiri = NSLocalizedString("addToSiri", comment: "Button to add script to Siri.")
@@ -41,6 +57,70 @@ class Localizable: Static {
     /// 'REPL' tab
     static let repl = NSLocalizedString("repl", comment: "'REPL' tab")
     
+    /// Action for moving file at current directory
+    static let moveHere = NSLocalizedString("moveHere", comment: "Action for moving file at current directory")
+    
+    /// 'Runtime' button on the editor
+    static let runtime = NSLocalizedString("runtime", comment: "'Runtime' button on the editor")
+    
+    // 'Change'
+    static let change = NSLocalizedString("change", comment: "'Change'")
+    
+    /// View controller simulating a widget on the Notification Center.
+    class WidgetSimulator: Static {
+
+        /// The message of the alert displayed when a widget script is set
+        static let alertMessage = NSLocalizedString("widget.alertMessage", comment: "Title of the button for collapsing a widget.")
+        
+        /// The title of the alert displayed when a widget script is set
+        static let alertTitle = NSLocalizedString("widget.alertTitle", comment: "The message of the alert displayed when a widget script is set")
+        
+        /// Title of the button for collapsing a widget.
+        static let showLess = NSLocalizedString("widget.showLess", comment: "Title of the button for collapsing a widget.")
+        
+        /// Title of the button for expanding a widget.
+        static let showMore = NSLocalizedString("widget.showMore", comment: "Title of the button for expanding a widget.")
+    }
+    
+    /// Alert for setting current directory.
+    class CurrentDirectoryAlert: Static {
+        
+        /// Message of the alert for setting current directory
+        static let message = NSLocalizedString("directoryAlert.message", comment: "Message of the alert for setting current directory")
+        
+        /// Title of the alert for setting current directory
+        static let title = NSLocalizedString("directoryAlert.title", comment: "Title of the alert for current directory")
+        
+        /// Message shown after the path of a directory that is not readable in the alert for setting the current directory
+        static let notReadable = NSLocalizedString("directoryAlert.notReadable", comment: "Message shown after the path of a directory that is not readable in the alert for setting the current directory")
+        
+        /// Message shown after the path of a directory that is readable in the alert for setting the current directory
+        static let readable = NSLocalizedString("directoryAlert.readable", comment: "Message shown after the path of a directory that is readable in the alert for setting the current directory")
+    }
+    
+    /// Strings used by `EditorActionsTableViewController`.
+    class EditorActionsTableViewController: Static {
+        
+        /// The title of the view controller for managing editor actions.
+        static let title = NSLocalizedString("editorActionsTableViewController.title", comment: "The title of the view controller for managing editor actions.")
+        
+        /// The title of the alert for adding an editor action.
+        static let createEditorActionAlertTitle = NSLocalizedString("editorActionsTableViewController.createEditorActionAlertTitle", comment: "The title of the alert for adding an editor action.")
+        
+        /// The message of the alert for adding an editor action.
+        static let createEditorActionAlertMessage = NSLocalizedString("editorActionsTableViewController.createEditorActionAlertMessage", comment: "The message of the alert for adding an editor action.")
+    }
+    
+    /// Strings used in the View controller that displays loaded modules.
+    class ModulesTableViewController: Static {
+        
+        /// The subtitle of the view controller for displaying modules
+        static let subtitle = NSLocalizedString("modulesTableViewController.subtitle", comment: "The subtitle of the view controller for displaying modules")
+        
+        /// The title of the view controller for displaying modules
+        static let title = NSLocalizedString("modulesTableViewController.title", comment: "The title of the view controller for displaying modules")
+    }
+    
     /// Strings for the alert for setting arguments.
     class ArgumentsAlert: Static {
         
@@ -57,9 +137,15 @@ class Localizable: Static {
         /// The text shown when a folder is empty
         static let noFiles = NSLocalizedString("noFiles", comment: "The text shown when a folder is empty")
         
-        /// The text shown when a folder has subdirectories but no files
-        static func noFilesButDirs(countOfDirs: Int) -> String {
-            return String(format: NSLocalizedString("noFilesButDirs", comment: "The text shown when a folder has subdirectories but no files"), countOfDirs)
+        /// The text shown for previewing a folder
+        static func numberOfFiles(_ countOfFiles: Int) -> String {
+            if countOfFiles > 1 {
+                return String(format: NSLocalizedString("numberOfFiles", comment: "The text shown when a folder has subdirectories but no files"), countOfFiles)
+            } else if countOfFiles == 0 {
+                return noFiles
+            } else {
+                return NSLocalizedString("oneFile", comment: "1 file")
+            }
         }
     }
     
@@ -106,6 +192,9 @@ class Localizable: Static {
     /// Strings for errors.
     class Errors: Static {
         
+        /// The title of the alert shown when a widget is set
+        static let errorSettingWidget = NSLocalizedString("errors.errorSettingWidget", comment: "The title of the alert shown when a widget is set")
+        
         /// The title of alerts shown when an error occurred while creating a file
         static let errorCreatingFile = NSLocalizedString("errors.errorCreatingFile", comment: "The title of alerts shown when an error occurred while creating a file")
         
@@ -119,7 +208,7 @@ class Localizable: Static {
         static let errorRemovingFile = NSLocalizedString("errors.errorRemovingFile", comment: "Title of the alert shown when an error occurred while removing a file")
         
         /// Title of the alert shown when an error occurred while renaming a file
-        static let errorRenamingFile = NSLocalizedString("errors.errorRenamingFIle", comment: "Title of the alert shown when an error occurred while renaming a file")
+        static let errorRenamingFile = NSLocalizedString("errors.errorRenamingFile", comment: "Title of the alert shown when an error occurred while renaming a file")
         
         /// Message shown when the user typed an empty name
         static let emptyName = NSLocalizedString("errors.emptyName", comment: "Message shown when the user typed an empty name")
@@ -148,6 +237,15 @@ class Localizable: Static {
         
         /// The title of the alert shown for creating a folder
         static let createFolder = NSLocalizedString("creation.createFolder", comment: "The title of the alert shown for creating a folder")
+        
+        /// The title of the button shown for creating a plain text file
+        static let createPlainText = NSLocalizedString("creation.createPlainText", comment: "The title of the button shown for creating a plain text file")
+        
+        /// The placeholder of the text field for typing file extension
+        static let fileExtension = NSLocalizedString("creation.extension", comment: "The placeholder of the text field for typing file extension")
+        
+        /// The placeholder of the text field for typing file name
+        static let fileName = NSLocalizedString("creation.name", comment: "The placeholder of the text field for typing file name")
         
         /// The message of the alert shown for creating a folder
         static let typeFolderName = NSLocalizedString("creation.typeFolderName", comment: "The message of the alert shown for creating a folder")
@@ -192,6 +290,12 @@ class Localizable: Static {
     /// Titles of items in `UIMenuController`.
     class MenuItems: Static {
         
+        /// The 'Undo' menu item
+        static let undo = NSLocalizedString("menuItems.undo", comment: "The 'Undo' menu item")
+        
+        /// The 'Redo' menu item
+        static let redo = NSLocalizedString("menuItems.redo", comment: "The 'Redo' menu item")
+        
         /// The 'Open' menu item
         static let open = NSLocalizedString("menuItems.open", comment: "The 'Open' menu item")
         
@@ -212,5 +316,8 @@ class Localizable: Static {
         
         /// The menu item for setting breakpoint
         static let breakpoint = NSLocalizedString("menuItems.breakpoint", comment: "The menu item for setting breakpoint")
+        
+        /// The menu item for setting breakpoint
+        static let toggleComment = NSLocalizedString("menuItems.toggleComment", comment: "The 'Toggle Comment' menu item")        
     }
 }

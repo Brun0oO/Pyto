@@ -17,15 +17,15 @@ struct LowKeySourceCodeTheme: SourceCodeTheme {
     let defaultTheme = DefaultSourceCodeTheme()
     
     var lineNumbersStyle: LineNumbersStyle? {
-        return nil
+        return defaultTheme.lineNumbersStyle
     }
     
     var gutterStyle: GutterStyle {
-        return GutterStyle(backgroundColor: .clear, minimumWidth: 0)
+        return GutterStyle(backgroundColor: backgroundColor, minimumWidth: defaultTheme.gutterStyle.minimumWidth)
     }
     
     var font: Font {
-        return defaultTheme.font
+        return defaultTheme.font.withSize(CGFloat(ThemeFontSize))
     }
     
     let backgroundColor = Color.white
@@ -62,8 +62,6 @@ struct LowKeySourceCodeTheme: SourceCodeTheme {
 
 // MARK: - Theme
 
-#if os(iOS)
-
 /// The Low Key theme.
 struct LowKeyTheme: Theme {
     
@@ -71,7 +69,9 @@ struct LowKeyTheme: Theme {
     
     let barStyle: UIBarStyle = .default
     
+    var userInterfaceStyle: UIUserInterfaceStyle {
+        return .light
+    }
+    
     let sourceCodeTheme: SourceCodeTheme = LowKeySourceCodeTheme()
 }
-
-#endif
